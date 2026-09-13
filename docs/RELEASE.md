@@ -89,6 +89,25 @@ why the script now verifies each `.sig` is a structurally valid minisign block
 (`untrusted comment:` + base64 payload starting with the `Ed` algorithm marker)
 instead of only checking that it is non-empty.
 
+## Windows/Linux sidecars depend on a third-party build that expires
+
+The Windows and Linux ffmpeg binaries come from the `BtbN/FFmpeg-Builds` project, which
+**prunes its old `autobuild-*` tags**. A pinned tag that works today can return 404 in a
+few weeks, and that is exactly how both non-macOS CI legs were broken without anyone
+noticing — they had never been executed.
+
+When `prepare-sidecars.sh` fails on a 404 for `BtbN/FFmpeg-Builds`:
+
+1. Open <https://github.com/BtbN/FFmpeg-Builds/releases> and pick the newest
+   `autobuild-*` tag.
+2. Read its `checksums.sha256` asset and copy the line for the wanted artifact.
+3. Update both `FFMPEG_ZIP_URL`/`FFMPEG_ZIP_SHA256` (Windows) or
+   `FFMPEG_TAR_URL`/`FFMPEG_TAR_SHA256` (Linux) in `scripts/prepare-sidecars.sh`.
+4. Verify locally with `shasum -a 256 <downloaded-file>`.
+
+The script now prints these instructions itself when a download fails, instead of
+surfacing a bare curl error.
+
 ## Runner notes
 
 - `ubuntu-22.04` is used deliberately for the Linux build: it is the last runner
