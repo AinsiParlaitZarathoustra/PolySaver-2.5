@@ -28,26 +28,26 @@ use tokio::sync::RwLock;
 /// domain's `is_absolute` check is what makes this matter: a relative-looking
 /// literal turns a passing test into a `ValidationError` on the Windows runner.
 fn abs_path(suffix: &str) -> String {
-    let base = if cfg!(windows) {
-        r"C:\polysaver_test"
-    } else {
-        "/polysaver_test"
-    };
-    format!("{base}/{suffix}")
+    abs_path_os().join(suffix).to_string_lossy().to_string()
 }
 
-/// Returns the expected string form of [`abs_path`] (Windows uses a backslash).
-fn abs_path_expected(suffix: &str) -> String {
-    let base = if cfg!(windows) {
-        r"C:\polysaver_test"
-    } else {
-        "/polysaver_test"
-    };
-    if cfg!(windows) {
-        format!(r"{base}\{suffix}")
-    } else {
-        format!("{base}/{suffix}")
-    }
+/// Absolute path whose text form is safe inside a JSON string literal.
+///
+/// A Windows path contains backslashes, which JSON would interpret as escape
+/// sequences (`\p` is not valid), so the forward-slash form is used: it is still
+/// an absolute path on Windows and requires no escaping.
+fn abs_path_json(suffix: &str) -> String {
+    abs_path_os()
+        .join(suffix)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// Platform-appropriate base directory for path fixtures.
+fn abs_path_os() -> std::path::PathBuf {
+    // `temp_dir()` is guaranteed absolute and exists on every platform, which
+    // makes it a sounder fixture root than any hand-written literal.
+    std::env::temp_dir().join("polysaver_test")
 }
 
 /// Polls `check` until it returns true or `timeout` elapses.
@@ -322,7 +322,7 @@ fn test_app_settings_path_policies() {
     .unwrap();
     assert_eq!(
         video_settings.download_directory(),
-        abs_path_expected("home/user/downloads")
+        abs_path("home/user/downloads")
     );
     assert_eq!(video_settings.theme_mode(), ThemeMode::Dark);
 
@@ -429,12 +429,15 @@ fn test_settings_cookies_and_engine_channel() {
     assert!(serde_json::from_str::<EngineChannel>("\"beta\"").is_err());
 
     // Legacy settings.json without the new keys stays loadable.
-    let legacy = r#"{
-        "downloadDirectory": "/tmp/downloads",
+    let legacy = format!(
+        r#"{{
+        "downloadDirectory": "{}",
         "themeMode": "system",
-        "defaultPreset": { "format": "mp4", "videoQuality": "p1080" }
-    }"#;
-    let legacy_dto: AppSettingsDto = serde_json::from_str(legacy).unwrap();
+        "defaultPreset": {{ "format": "mp4", "videoQuality": "p1080" }}
+    }}"#,
+        abs_path_json("downloads")
+    );
+    let legacy_dto: AppSettingsDto = serde_json::from_str(&legacy).unwrap();
     assert_eq!(legacy_dto.cookies_from_browser, None);
     assert_eq!(legacy_dto.engine_channel, EngineChannel::Stable);
     assert_eq!(
@@ -482,7 +485,7 @@ fn test_download_job_lifecycle() {
     assert_eq!(job.progress_percent(), None);
     assert_eq!(
         job.destination_path(),
-        Some(abs_path_expected("output/video.mp4").as_str())
+        Some(abs_path("output/video.mp4").as_str())
     );
     assert!(job.is_terminal());
 
@@ -847,10 +850,7 @@ fn test_app_settings_dto_try_from() {
     };
 
     let settings = AppSettings::try_from(dto).unwrap();
-    assert_eq!(
-        settings.download_directory(),
-        abs_path_expected("path/to/downloads")
-    );
+    assert_eq!(settings.download_directory(), abs_path("path/to/downloads"));
     assert_eq!(settings.theme_mode(), ThemeMode::System);
     assert_eq!(settings.default_preset(), DownloadPreset::Flac);
     assert_eq!(settings.language(), Language::English);
@@ -883,19 +883,22 @@ fn test_language_serialization_and_defaults() {
     // Deserialization without language defaults to French.
     // Legacy `parallelDownloads` / `maxConcurrent` keys from pre-2.5 settings files
     // must be ignored gracefully for backward compatibility (no migration needed).
-    let json_without_language = r#"{
-        "downloadDirectory": "/downloads",
+    let json_without_language = format!(
+        r#"{{
+        "downloadDirectory": "{}",
         "themeMode": "system",
         "parallelDownloads": true,
-        "defaultPreset": {
+        "defaultPreset": {{
             "format": "mp3",
             "mp3Quality": "k320"
-        },
+        }},
         "maxConcurrent": 3
-    }"#;
-    let dto: AppSettingsDto = serde_json::from_str(json_without_language).unwrap();
+    }}"#,
+        abs_path_json("downloads")
+    );
+    let dto: AppSettingsDto = serde_json::from_str(&json_without_language).unwrap();
     assert_eq!(dto.language, Language::French);
-    assert_eq!(dto.download_directory, "/downloads");
+    assert_eq!(dto.download_directory, abs_path_json("downloads"));
     let legacy_settings = AppSettings::try_from(dto).unwrap();
     assert_eq!(
         legacy_settings.default_preset(),
@@ -1201,10 +1204,7 @@ async fn test_download_history_entry_invariants_and_actions() {
     .unwrap();
 
     assert_eq!(entry.title(), "Me at the zoo");
-    assert_eq!(
-        entry.destination_path(),
-        abs_path_expected("downloads/zoo.mp4")
-    );
+    assert_eq!(entry.destination_path(), abs_path("downloads/zoo.mp4"));
     assert_eq!(entry.completed_at(), 123456789);
     assert_eq!(entry.download_id(), job_id);
 

@@ -533,12 +533,24 @@ mod tests {
     /// Builds an absolute path valid on every platform: a Unix-looking literal is
     /// not absolute under Windows, and the domain validates destination paths.
     fn abs_path(suffix: &str) -> String {
-        let base = if cfg!(windows) {
-            r"C:\polysaver_test"
-        } else {
-            "/polysaver_test"
-        };
-        format!("{base}/{suffix}")
+        abs_path_os().join(suffix).to_string_lossy().to_string()
+    }
+
+    /// Absolute path whose text form is safe inside a JSON string literal.
+    ///
+    /// A Windows path contains backslashes, which JSON reads as escape sequences
+    /// (`\p` is invalid), so the forward-slash form is used instead: still
+    /// absolute on Windows, and it needs no escaping.
+    fn abs_path_json(suffix: &str) -> String {
+        abs_path_os()
+            .join(suffix)
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+
+    /// Platform-appropriate base directory for path fixtures.
+    fn abs_path_os() -> std::path::PathBuf {
+        std::env::temp_dir().join("polysaver_test")
     }
 
     #[tokio::test]
@@ -662,7 +674,8 @@ mod tests {
                 }
             ]
         }"#;
-        let legacy_json = legacy_json.replace("LEGACY_PATH_PLACEHOLDER", &abs_path("legacy.mp4"));
+        let legacy_json =
+            legacy_json.replace("LEGACY_PATH_PLACEHOLDER", &abs_path_json("legacy.mp4"));
         tokio::fs::write(&legacy_file, legacy_json.as_bytes())
             .await
             .unwrap();

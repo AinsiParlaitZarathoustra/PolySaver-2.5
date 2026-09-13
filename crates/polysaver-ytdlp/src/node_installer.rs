@@ -192,8 +192,13 @@ const fn node_asset_for_win_arm64() -> &'static str {
 ///
 /// The official archives contain several entries named `node` that are
 /// *directories* (`include/node/`, `share/doc/node/`, ...), so matching on the
-/// file name alone would extract an empty file. Only a regular file located in
-/// a `bin/` directory (or the archive root on Windows) qualifies.
+/// file name alone would extract an empty file. The real layouts are:
+/// - Unix: `node-vX-<platform>/bin/node` (inside a `bin/` directory)
+/// - Windows: `node-vX-win-<arch>/node.exe` (directly in the versioned directory)
+///
+/// The rule keys on the layout, not on the host platform, so both shapes are
+/// testable on any machine and the extraction behaviour cannot diverge between
+/// the platform that builds and the one that runs.
 fn is_runtime_entry(path: &Path, is_regular_file: bool, binary_name: &str) -> bool {
     if !is_regular_file {
         return false;
@@ -201,13 +206,19 @@ fn is_runtime_entry(path: &Path, is_regular_file: bool, binary_name: &str) -> bo
     if path.file_name().and_then(|n| n.to_str()) != Some(binary_name) {
         return false;
     }
-    let mut components = path.components().rev();
-    let _file = components.next();
-    match components.next() {
-        // `.../bin/node` (Unix layout)
-        Some(std::path::Component::Normal(dir)) => dir == "bin",
-        // `node.exe` at the archive root (Windows layout)
-        None => cfg!(windows),
+
+    let components: Vec<_> = path.components().collect();
+    // Reject anything buried deeper than `<versioned-dir>/<name>` or
+    // `<versioned-dir>/bin/<name>`: the executable is never nested further.
+    if components.len() > 3 {
+        return false;
+    }
+
+    match components.as_slice() {
+        // `<versioned-dir>/node.exe`
+        [_, _] => true,
+        // `<versioned-dir>/bin/node`
+        [_, bin, _] => matches!(bin, std::path::Component::Normal(dir) if *dir == "bin"),
         _ => false,
     }
 }
@@ -323,6 +334,16 @@ pub fn sha256_of(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    /// Entry path matching the real archive layout for this platform:
+    /// Unix uses `<versioned>/bin/node`, Windows `<versioned>/node.exe`.
+    fn fixture_entry_path() -> String {
+        if cfg!(windows) {
+            "node-v24.21.0-win-x64/node.exe".to_string()
+        } else {
+            "node-v24.21.0-darwin-arm64/bin/node".to_string()
+        }
+    }
+
     #[test]
     fn test_node_asset_name_matches_platform() {
         let asset = node_asset_name().unwrap();
@@ -362,11 +383,7 @@ mod tests {
             header.set_mode(0o755);
             header.set_cksum();
             builder
-                .append_data(
-                    &mut header,
-                    "node-v24.21.0-darwin-arm64/bin/node",
-                    &payload[..],
-                )
+                .append_data(&mut header, fixture_entry_path(), &payload[..])
                 .unwrap();
             let encoder = builder.into_inner().unwrap();
             encoder.finish().unwrap();
@@ -402,13 +419,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let archive_path = dir.join("fake.zip");
 
-        // Use this platform's expected entry layout so the test is host-agnostic:
-        // Windows keeps node.exe at the archive root, Unix uses bin/node.
-        let entry_name = if cfg!(windows) {
-            "node-v24.21.0-win-x64/node.exe".to_string()
-        } else {
-            "node-v24.21.0-darwin-arm64/bin/node".to_string()
-        };
+        // Platform-appropriate entry layout (see fixture_entry_path).
+        let entry_name = fixture_entry_path();
 
         {
             let file = std::fs::File::create(&archive_path).unwrap();
@@ -451,7 +463,7 @@ mod tests {
             true,
             "node"
         ));
-        // The real executable is accepted.
+        // The real Unix executable is accepted.
         assert!(is_runtime_entry(
             Path::new("node-v24.21.0-darwin-arm64/bin/node"),
             true,
@@ -463,6 +475,46 @@ mod tests {
             true,
             "node"
         ));
+    }
+
+    /// Both official layouts must be recognised on every platform, so extraction
+    /// cannot work on macOS and silently fail on Windows.
+    #[test]
+    fn test_is_runtime_entry_accepts_both_official_layouts() {
+        // Unix: `<versioned>/bin/node`
+        assert!(is_runtime_entry(
+            Path::new("node-v24.21.0-darwin-arm64/bin/node"),
+            true,
+            "node"
+        ));
+        assert!(is_runtime_entry(
+            Path::new("node-v24.21.0-linux-x64/bin/node"),
+            true,
+            "node"
+        ));
+
+        // Windows: `<versioned>/node.exe`, no `bin/` level.
+        assert!(is_runtime_entry(
+            Path::new("node-v24.21.0-win-x64/node.exe"),
+            true,
+            "node.exe"
+        ));
+
+        // A regular `node` sitting in a non-bin subdirectory is not the runtime.
+        assert!(!is_runtime_entry(
+            Path::new("node-v24.21.0-darwin-arm64/lib/node"),
+            true,
+            "node"
+        ));
+        // Deeper nesting is rejected even with the right file name.
+        assert!(!is_runtime_entry(
+            Path::new("node-v24.21.0-win-x64/nested/dir/node.exe"),
+            true,
+            "node.exe"
+        ));
+        // A root-level file is never the runtime.
+        assert!(!is_runtime_entry(Path::new("node.exe"), true, "node.exe"));
+        assert!(!is_runtime_entry(Path::new("node"), true, "node"));
     }
 
     #[test]
@@ -499,11 +551,7 @@ mod tests {
             header.set_mode(0o755);
             header.set_cksum();
             builder
-                .append_data(
-                    &mut header,
-                    "node-v24.21.0-darwin-arm64/bin/node",
-                    &payload[..],
-                )
+                .append_data(&mut header, fixture_entry_path(), &payload[..])
                 .unwrap();
 
             let encoder = builder.into_inner().unwrap();
