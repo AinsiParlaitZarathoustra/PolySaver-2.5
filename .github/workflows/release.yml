@@ -26,6 +26,20 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
+      # Policy guard: releases are published from the public `PolySaver` repository.
+      # This development repository holds no signing secret, so without this step a
+      # release attempt would fail later with a confusing "secret not configured"
+      # error instead of stating the actual policy.
+      - name: Verify this repository publishes releases
+        env:
+          RELEASE_REPOSITORY: AinsiParlaitZarathoustra/PolySaver
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REPOSITORY}" != "${RELEASE_REPOSITORY}" ]; then
+            echo "::error::Releases are published from ${RELEASE_REPOSITORY}; ${GITHUB_REPOSITORY} is development-only."
+            exit 1
+          fi
+
       - name: Checkout source
         uses: actions/checkout@v7
 
