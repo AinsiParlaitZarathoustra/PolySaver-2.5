@@ -8,10 +8,14 @@ import { relaunch } from '@tauri-apps/plugin-process';
 import type {
   AppError,
   AppSettingsDto,
+  DownloadErrorDetails,
   DownloadHistoryEntryDto,
   DownloadJobDto,
   DownloadPresetDto,
+  EngineUpdateResultDto,
+  EngineUpdateStatusDto,
   HealthStatus,
+  JsRuntimeStatusDto,
   ProbeResult,
   UpdateInfo,
   UpdateProgressCallback,
@@ -19,14 +23,41 @@ import type {
 
 /**
  * Normalizes any unknown rejection into a structured AppError.
+ *
+ * The backend `IpcError` payload is flat: `{ code, message, retryable, details? }`
+ * where `details` carries `component`, `exitCode` and `stderrTail`. All of these
+ * are preserved so the UI can show localized messages *and* technical details.
  */
 export function normalizeIpcError(err: unknown): AppError {
   if (typeof err === 'object' && err !== null && 'code' in err && 'message' in err) {
-    const candidate = err as { code: unknown; message: unknown };
-    return {
+    const candidate = err as Record<string, unknown>;
+    const out: AppError = {
       code: String(candidate.code),
       message: String(candidate.message),
     };
+    if (typeof candidate.retryable === 'boolean') {
+      out.retryable = candidate.retryable;
+    }
+    if (typeof candidate.details === 'object' && candidate.details !== null) {
+      out.details = candidate.details as DownloadErrorDetails;
+    }
+    // Tolerate flat variants (component/exitCode/stderrTail at top level).
+    if (
+      out.details === undefined &&
+      (typeof candidate.component === 'string' ||
+        typeof candidate.exitCode === 'number' ||
+        typeof candidate.stderrTail === 'string')
+    ) {
+      out.details = {
+        code: out.code as DownloadErrorDetails['code'],
+        message: out.message,
+        retryable: out.retryable ?? false,
+        component: typeof candidate.component === 'string' ? candidate.component : undefined,
+        exitCode: typeof candidate.exitCode === 'number' ? candidate.exitCode : undefined,
+        stderrTail: typeof candidate.stderrTail === 'string' ? candidate.stderrTail : undefined,
+      };
+    }
+    return out;
   }
 
   if (err instanceof Error) {
@@ -45,6 +76,7 @@ export function normalizeIpcError(err: unknown): AppError {
 export interface IpcClient {
   healthCheck(): Promise<HealthStatus>;
   analyzeUrl(url: string): Promise<ProbeResult>;
+  cancelAnalyze(): Promise<void>;
   getSettings(): Promise<AppSettingsDto>;
   setSettings(settings: AppSettingsDto): Promise<AppSettingsDto>;
   startDownload(
@@ -54,6 +86,7 @@ export interface IpcClient {
   ): Promise<DownloadJobDto>;
   listDownloads(): Promise<DownloadJobDto[]>;
   cancelDownload(downloadId: string): Promise<DownloadJobDto>;
+  retryDownload(downloadId: string): Promise<DownloadJobDto>;
   dismissDownload(downloadId: string): Promise<void>;
   openDownloadSourceUrl(downloadId: string): Promise<void>;
   pickDirectory(defaultPath?: string): Promise<string | null>;
@@ -68,6 +101,11 @@ export interface IpcClient {
   checkForUpdates(): Promise<UpdateInfo | null>;
   downloadAndInstallUpdate(onProgress?: UpdateProgressCallback): Promise<void>;
   restartApp(): Promise<void>;
+  checkEngineUpdate(): Promise<EngineUpdateStatusDto>;
+  updateEngine(): Promise<EngineUpdateResultDto>;
+  rollbackEngine(): Promise<EngineUpdateResultDto>;
+  checkJsRuntime(): Promise<JsRuntimeStatusDto>;
+  installJsRuntime(): Promise<JsRuntimeStatusDto>;
 }
 
 export class TauriIpcClient implements IpcClient {
@@ -82,6 +120,14 @@ export class TauriIpcClient implements IpcClient {
   async analyzeUrl(url: string): Promise<ProbeResult> {
     try {
       return await invoke<ProbeResult>('analyze_url', { request: { url } });
+    } catch (err) {
+      throw normalizeIpcError(err);
+    }
+  }
+
+  async cancelAnalyze(): Promise<void> {
+    try {
+      await invoke('cancel_analyze');
     } catch (err) {
       throw normalizeIpcError(err);
     }
@@ -136,6 +182,14 @@ export class TauriIpcClient implements IpcClient {
   async dismissDownload(downloadId: string): Promise<void> {
     try {
       await invoke('dismiss_download', { downloadId });
+    } catch (err) {
+      throw normalizeIpcError(err);
+    }
+  }
+
+  async retryDownload(downloadId: string): Promise<DownloadJobDto> {
+    try {
+      return await invoke<DownloadJobDto>('retry_download', { downloadId });
     } catch (err) {
       throw normalizeIpcError(err);
     }
@@ -282,6 +336,46 @@ export class TauriIpcClient implements IpcClient {
   async restartApp(): Promise<void> {
     try {
       await relaunch();
+    } catch (err) {
+      throw normalizeIpcError(err);
+    }
+  }
+
+  async checkEngineUpdate(): Promise<EngineUpdateStatusDto> {
+    try {
+      return await invoke<EngineUpdateStatusDto>('check_engine_update');
+    } catch (err) {
+      throw normalizeIpcError(err);
+    }
+  }
+
+  async updateEngine(): Promise<EngineUpdateResultDto> {
+    try {
+      return await invoke<EngineUpdateResultDto>('update_engine');
+    } catch (err) {
+      throw normalizeIpcError(err);
+    }
+  }
+
+  async rollbackEngine(): Promise<EngineUpdateResultDto> {
+    try {
+      return await invoke<EngineUpdateResultDto>('rollback_engine');
+    } catch (err) {
+      throw normalizeIpcError(err);
+    }
+  }
+
+  async checkJsRuntime(): Promise<JsRuntimeStatusDto> {
+    try {
+      return await invoke<JsRuntimeStatusDto>('check_js_runtime');
+    } catch (err) {
+      throw normalizeIpcError(err);
+    }
+  }
+
+  async installJsRuntime(): Promise<JsRuntimeStatusDto> {
+    try {
+      return await invoke<JsRuntimeStatusDto>('install_js_runtime');
     } catch (err) {
       throw normalizeIpcError(err);
     }

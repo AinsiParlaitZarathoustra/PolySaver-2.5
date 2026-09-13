@@ -20,6 +20,28 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 
 export type Language = 'fr' | 'en';
 
+/**
+ * Maximum automatic attempts (1 initial + retries) applied by the backend.
+ * Mirrors `RetryPolicy::default().max_attempts` in `polysaver-core`
+ * (`crates/polysaver-core/src/services/retry.rs`), which is pinned by a unit test.
+ */
+export const MAX_RETRY_ATTEMPTS = 3;
+
+/** yt-dlp release channel selectable in the engine diagnostics card. */
+export type EngineChannel = 'stable' | 'nightly';
+
+/** Browser whose cookie database yt-dlp may read (closed list, no free-form value). */
+export type CookiesBrowser =
+  | 'brave'
+  | 'chrome'
+  | 'chromium'
+  | 'edge'
+  | 'firefox'
+  | 'opera'
+  | 'safari'
+  | 'vivaldi'
+  | 'whale';
+
 export type DownloadStatus =
   | 'queued'
   | 'preparing'
@@ -75,10 +97,14 @@ export interface DownloadPresetDto {
 export interface AppSettingsDto {
   downloadDirectory: string;
   themeMode: ThemeMode;
-  parallelDownloads: boolean;
   defaultPreset: DownloadPresetDto;
-  maxConcurrent: number;
   language?: Language;
+  /** Browser used for `--cookies-from-browser`; undefined = no cookies. */
+  cookiesFromBrowser?: CookiesBrowser;
+  /** yt-dlp release channel; defaults to stable. */
+  engineChannel?: EngineChannel;
+  /** Persisted schema version; written by the backend. */
+  schemaVersion?: number;
 }
 
 export interface FormatOption {
@@ -88,6 +114,8 @@ export interface FormatOption {
   hasAudio: boolean;
   extension: string;
   filesizeApproxBytes?: number | null;
+  /** Average total bitrate in kbps; size fallback for HLS/DASH formats. */
+  tbr?: number | null;
   note?: string | null;
 }
 
@@ -108,10 +136,27 @@ export interface AvailabilityStatus {
   statusMessage: string;
 }
 
+/** JavaScript runtime availability (Deno preferred, then Node). */
+export interface JsRuntimeAvailabilityStatus extends AvailabilityStatus {
+  /** `deno` or `node` when a runtime was detected. */
+  kind?: string | null;
+}
+
 export interface HealthStatus {
   coreStatus: string;
   ytdlp: AvailabilityStatus;
   ffmpeg: AvailabilityStatus;
+  jsRuntime?: JsRuntimeAvailabilityStatus;
+}
+
+/** Detailed JavaScript runtime status returned by `checkJsRuntime`. */
+export interface JsRuntimeStatusDto {
+  kind?: string | null;
+  version?: string | null;
+  path?: string | null;
+  isReady: boolean;
+  /** A runtime exists but is older than the version yt-dlp requires. */
+  versionTooOld: boolean;
 }
 
 export interface DownloadJobDto {
@@ -127,6 +172,8 @@ export interface DownloadJobDto {
   destinationPath?: string | null;
   errorMessage?: string | null;
   errorDetails?: DownloadErrorDetails | null;
+  /** Number of automatic retries already performed for this job. */
+  retryCount?: number;
 }
 
 export interface DownloadHistoryEntryDto {
@@ -154,25 +201,26 @@ export interface DownloadWarningEvent {
   message: string;
 }
 
+export interface EngineUpdateStatusDto {
+  currentVersion?: string | null;
+  latestVersion?: string | null;
+  channel: string;
+  outdated: boolean;
+  canUpdate: boolean;
+  canRollback: boolean;
+}
+
+export interface EngineUpdateResultDto {
+  installedVersion: string;
+  updated: boolean;
+  latestVersion?: string | null;
+}
+
 export interface AppError {
   code: string;
   message: string;
   retryable?: boolean;
   details?: DownloadErrorDetails;
-}
-
-export interface StartDownloadRequestDto {
-  url: string;
-  preset?: DownloadPresetDto;
-  outputDirectory?: string;
-}
-
-export interface AnalyzeUrlRequest {
-  url: string;
-}
-
-export interface SetSettingsRequest {
-  settings: AppSettingsDto;
 }
 
 export interface UpdateInfo {

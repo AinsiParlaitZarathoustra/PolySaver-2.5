@@ -35,6 +35,8 @@ interface HelpSupportDialogProps {
   onClose: () => void;
   client: IpcClient;
   hasActiveDownloads: boolean;
+  /** Surfaces action failures to the app-level toast instead of console-only. */
+  onError?: (message: string) => void;
 }
 
 export const HelpSupportDialog: React.FC<HelpSupportDialogProps> = ({
@@ -42,6 +44,7 @@ export const HelpSupportDialog: React.FC<HelpSupportDialogProps> = ({
   onClose,
   client,
   hasActiveDownloads,
+  onError,
 }) => {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<number>(0);
@@ -63,8 +66,9 @@ export const HelpSupportDialog: React.FC<HelpSupportDialogProps> = ({
       await client.openSupportPage();
     } catch (err) {
       console.error('Failed to open support page:', err);
+      onError?.(t('errors.UNKNOWN_ERROR'));
     }
-  }, [client]);
+  }, [client, onError, t]);
 
   const handleCheckForUpdates = useCallback(async () => {
     setUpdaterStatus('checking');
@@ -110,8 +114,10 @@ export const HelpSupportDialog: React.FC<HelpSupportDialogProps> = ({
       await client.restartApp();
     } catch (err) {
       console.error('Failed to restart app:', err);
+      setUpdaterError(err instanceof Error ? err.message : t('help.updater.error'));
+      setUpdaterStatus('error');
     }
-  }, [client]);
+  }, [client, t]);
 
   return (
     <Dialog

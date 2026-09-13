@@ -35,6 +35,8 @@ describe('Sprint 8.4: Help, Support and Updater', () => {
     startDownload: vi.fn(),
     listDownloads: vi.fn(),
     cancelDownload: vi.fn(),
+    cancelAnalyze: vi.fn(),
+    retryDownload: vi.fn(),
     dismissDownload: vi.fn(),
     openDownloadSourceUrl: vi.fn(),
     pickDirectory: vi.fn(),
@@ -49,6 +51,29 @@ describe('Sprint 8.4: Help, Support and Updater', () => {
     checkForUpdates: vi.fn().mockResolvedValue(null),
     downloadAndInstallUpdate: vi.fn().mockResolvedValue(undefined),
     restartApp: vi.fn().mockResolvedValue(undefined),
+    checkEngineUpdate: vi.fn().mockResolvedValue({
+      currentVersion: '2026.08.19',
+      latestVersion: '2026.08.19',
+      channel: 'stable',
+      outdated: false,
+      canUpdate: false,
+    }),
+    updateEngine: vi.fn().mockResolvedValue({ installedVersion: '2026.08.19', updated: true, latestVersion: null }),
+    rollbackEngine: vi.fn().mockResolvedValue({ installedVersion: '2026.08.19', updated: true, latestVersion: null }),
+    checkJsRuntime: vi.fn().mockResolvedValue({
+      kind: 'node',
+      version: '24.21.0',
+      path: '/tmp/node',
+      isReady: true,
+      versionTooOld: false,
+    }),
+    installJsRuntime: vi.fn().mockResolvedValue({
+      kind: 'node',
+      version: '24.21.0',
+      path: '/tmp/node',
+      isReady: true,
+      versionTooOld: false,
+    }),
     ...overrides,
   });
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 PolySaver contributors
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -33,6 +33,7 @@ import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
 import { useTranslation } from 'react-i18next';
 import { defaultIpcClient } from '../ipc/client';
+import { estimateDownloadSize, formatBytes } from '../utils/sizeEstimate';
 import type {
   DownloadPresetDto,
   Mp3Quality,
@@ -91,15 +92,6 @@ function formatDuration(seconds?: number | null): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-function formatBytes(bytes?: number | null): string {
-  if (!bytes || bytes <= 0) return '';
-  const mib = bytes / (1024 * 1024);
-  if (mib >= 1024) {
-    return `~${(mib / 1024).toFixed(1)} GB`;
-  }
-  return `~${Math.round(mib)} MB`;
-}
-
 function getQualityMeta(
   quality: VideoQuality,
   bestLabel: string,
@@ -150,6 +142,23 @@ export const DownloadOptionsDialog: React.FC<DownloadOptionsDialogProps> = ({
   const [selectedDirectory, setSelectedDirectory] = useState<string>(defaultDownloadDirectory);
   const [imgError, setImgError] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Safety net: if the dialog unmounts while an analysis is still running
+  // (route/state change), make sure the process is aborted through onClose.
+  const latestOnCloseRef = useRef(onClose);
+  const latestIsLoadingRef = useRef(isLoading);
+  useEffect(() => {
+    latestOnCloseRef.current = onClose;
+    latestIsLoadingRef.current = isLoading;
+  }, [onClose, isLoading]);
+  useEffect(
+    () => () => {
+      if (latestIsLoadingRef.current) {
+        latestOnCloseRef.current();
+      }
+    },
+    [],
+  );
 
   // Derive dynamic video qualities based on probe result
   const videoQualities = useMemo(() => {
@@ -273,18 +282,19 @@ export const DownloadOptionsDialog: React.FC<DownloadOptionsDialogProps> = ({
 
   const getApproxSizeForQuality = (quality: VideoQuality): string | null => {
     if (!probeResult?.formats) return null;
+
+    // 'best' has no height constraint; pXXX maps to the exact target height.
     const targetHeight =
-      videoQualities.find((q) => q.quality === quality)?.height ?? 0;
+      quality === 'best'
+        ? 'best'
+        : (videoQualities.find((q) => q.quality === quality)?.height ?? 0);
 
-    if (quality === 'best') {
-      const match = probeResult.formats.find((f) => f.filesizeApproxBytes);
-      return match?.filesizeApproxBytes ? formatBytes(match.filesizeApproxBytes) : null;
-    }
-
-    const match = probeResult.formats.find(
-      (f) => f.height === targetHeight && f.filesizeApproxBytes,
+    const estimate = estimateDownloadSize(
+      probeResult.formats,
+      targetHeight,
+      probeResult.durationSeconds,
     );
-    return match?.filesizeApproxBytes ? formatBytes(match.filesizeApproxBytes) : null;
+    return formatBytes(estimate) || null;
   };
 
   const hasSafeThumbnail =

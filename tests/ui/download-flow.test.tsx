@@ -15,9 +15,13 @@ import { DownloadHistory } from '../../src/components/DownloadHistory';
 import { EmptyQueue } from '../../src/components/EmptyQueue';
 import { SettingsDrawer } from '../../src/components/SettingsDrawer';
 import { DownloadOptionsDialog } from '../../src/components/DownloadOptionsDialog';
+import { JsRuntimeSetupDialog } from '../../src/components/JsRuntimeSetupDialog';
 import { useAutosaveSettings } from '../../src/features/settings/useAutosaveSettings';
 import { formatTransferRate } from '../../src/utils/formatTransferRate';
-import { defaultIpcClient } from '../../src/ipc/client';
+import { defaultIpcClient, normalizeIpcError } from '../../src/ipc/client';
+import { fr } from '../../src/i18n/locales/fr';
+import { en } from '../../src/i18n/locales/en';
+import { MAX_RETRY_ATTEMPTS } from '../../src/ipc/contracts';
 import type {
   AppSettingsDto,
   DownloadHistoryEntryDto,
@@ -40,9 +44,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
   const defaultSettings: AppSettingsDto = {
     downloadDirectory: '~/Downloads/PolySaver',
     themeMode: 'system',
-    parallelDownloads: true,
     defaultPreset,
-    maxConcurrent: 3,
     language: 'fr',
   };
 
@@ -85,6 +87,25 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
     expect(logo).toBeInTheDocument();
     expect(logo).toHaveAttribute('src');
     expect(logo.getAttribute('src')).not.toBe('/PolySaver_logo.png');
+    // The enlarged, centered title keeps the localized app name.
+    expect(screen.getByText('PolySaver')).toBeInTheDocument();
+  });
+
+  // 2b. Quality label shortened to "Meilleure" / "Best"
+  it('uses the short best-quality label in both languages', () => {
+    expect(fr.dialog.bestQuality).toBe('Meilleure');
+    expect(en.dialog.bestQuality).toBe('Best');
+    expect(fr.dialog.bestQuality).not.toMatch(/disponible/i);
+    expect(en.dialog.bestQuality).not.toMatch(/available/i);
+
+    // No residual long prose in the UI catalogs for that label.
+    expect(JSON.stringify(fr)).not.toContain('Meilleure disponible');
+    expect(JSON.stringify(en)).not.toContain('Best available');
+  });
+
+  // 2c. Retry chip maximum stays aligned with the backend policy
+  it('derives the retry maximum from the shared constant', () => {
+    expect(MAX_RETRY_ATTEMPTS).toBe(3);
   });
 
   // 3. DownloadForm layout and buttons in FR and EN
@@ -384,6 +405,8 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       startDownload: vi.fn(),
       listDownloads: vi.fn(),
       cancelDownload: vi.fn(),
+      cancelAnalyze: vi.fn(),
+      retryDownload: vi.fn(),
       dismissDownload: vi.fn(),
       openDownloadSourceUrl: vi.fn(),
       analyzeUrl: vi.fn(),
@@ -399,6 +422,29 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       checkForUpdates: vi.fn().mockResolvedValue(null),
       downloadAndInstallUpdate: vi.fn().mockResolvedValue(undefined),
       restartApp: vi.fn().mockResolvedValue(undefined),
+      checkEngineUpdate: vi.fn().mockResolvedValue({
+        currentVersion: '2026.08.19',
+        latestVersion: '2026.08.19',
+        channel: 'stable',
+        outdated: false,
+        canUpdate: false,
+      }),
+      updateEngine: vi.fn().mockResolvedValue({ installedVersion: '2026.08.19', updated: true, latestVersion: null }),
+      rollbackEngine: vi.fn().mockResolvedValue({ installedVersion: '2026.08.19', updated: true, latestVersion: null }),
+      checkJsRuntime: vi.fn().mockResolvedValue({
+        kind: 'node',
+        version: '24.21.0',
+        path: '/tmp/node',
+        isReady: true,
+        versionTooOld: false,
+      }),
+      installJsRuntime: vi.fn().mockResolvedValue({
+        kind: 'node',
+        version: '24.21.0',
+        path: '/tmp/node',
+        isReady: true,
+        versionTooOld: false,
+      }),
     };
 
     let hookResult: ReturnType<typeof useAutosaveSettings> | undefined;
@@ -438,12 +484,10 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
     const defaultSettings: AppSettingsDto = {
       downloadDirectory: '/Users/alice/Downloads/PolySaver',
       themeMode: 'system',
-      parallelDownloads: false,
       defaultPreset: {
         format: 'mp4',
         videoQuality: 'best',
       },
-      maxConcurrent: 3,
       language: 'fr',
     };
 
@@ -461,6 +505,8 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       startDownload: vi.fn(),
       listDownloads: vi.fn(),
       cancelDownload: vi.fn(),
+      cancelAnalyze: vi.fn(),
+      retryDownload: vi.fn(),
       dismissDownload: vi.fn(),
       openDownloadSourceUrl: vi.fn(),
       analyzeUrl: vi.fn(),
@@ -476,6 +522,29 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       checkForUpdates: vi.fn().mockResolvedValue(null),
       downloadAndInstallUpdate: vi.fn().mockResolvedValue(undefined),
       restartApp: vi.fn().mockResolvedValue(undefined),
+      checkEngineUpdate: vi.fn().mockResolvedValue({
+        currentVersion: '2026.08.19',
+        latestVersion: '2026.08.19',
+        channel: 'stable',
+        outdated: false,
+        canUpdate: false,
+      }),
+      updateEngine: vi.fn().mockResolvedValue({ installedVersion: '2026.08.19', updated: true, latestVersion: null }),
+      rollbackEngine: vi.fn().mockResolvedValue({ installedVersion: '2026.08.19', updated: true, latestVersion: null }),
+      checkJsRuntime: vi.fn().mockResolvedValue({
+        kind: 'node',
+        version: '24.21.0',
+        path: '/tmp/node',
+        isReady: true,
+        versionTooOld: false,
+      }),
+      installJsRuntime: vi.fn().mockResolvedValue({
+        kind: 'node',
+        version: '24.21.0',
+        path: '/tmp/node',
+        isReady: true,
+        versionTooOld: false,
+      }),
     };
 
     let hookResult: ReturnType<typeof useAutosaveSettings> | undefined;
@@ -526,15 +595,15 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       getSettings: vi.fn().mockResolvedValue({
         downloadDirectory: '/downloads',
         themeMode: 'system',
-        parallelDownloads: false,
         defaultPreset: { format: 'mp4', videoQuality: 'best' },
-        maxConcurrent: 3,
         language: 'fr',
       }),
       setSettings: vi.fn(),
       startDownload: vi.fn(),
       listDownloads: vi.fn(),
       cancelDownload: vi.fn().mockResolvedValue(canceledJob),
+      cancelAnalyze: vi.fn(),
+      retryDownload: vi.fn(),
       dismissDownload: vi.fn(),
       openDownloadSourceUrl: vi.fn(),
       analyzeUrl: vi.fn(),
@@ -550,10 +619,290 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       checkForUpdates: vi.fn().mockResolvedValue(null),
       downloadAndInstallUpdate: vi.fn().mockResolvedValue(undefined),
       restartApp: vi.fn().mockResolvedValue(undefined),
+      checkEngineUpdate: vi.fn().mockResolvedValue({
+        currentVersion: '2026.08.19',
+        latestVersion: '2026.08.19',
+        channel: 'stable',
+        outdated: false,
+        canUpdate: false,
+      }),
+      updateEngine: vi.fn().mockResolvedValue({ installedVersion: '2026.08.19', updated: true, latestVersion: null }),
+      rollbackEngine: vi.fn().mockResolvedValue({ installedVersion: '2026.08.19', updated: true, latestVersion: null }),
+      checkJsRuntime: vi.fn().mockResolvedValue({
+        kind: 'node',
+        version: '24.21.0',
+        path: '/tmp/node',
+        isReady: true,
+        versionTooOld: false,
+      }),
+      installJsRuntime: vi.fn().mockResolvedValue({
+        kind: 'node',
+        version: '24.21.0',
+        path: '/tmp/node',
+        isReady: true,
+        versionTooOld: false,
+      }),
     };
 
     const res = await mockClient.cancelDownload(canceledJob.id);
     expect(res.status).toBe('canceled');
     expect(res.id).toBe(canceledJob.id);
+  });
+
+  // 14. Retry action only on failed jobs
+  it('shows a Retry button only on failed jobs and triggers the callback', async () => {
+    const user = userEvent.setup();
+    const handleRetry = vi.fn();
+    const theme = createAppTheme('dark');
+    const jobs: DownloadJobDto[] = [
+      {
+        id: 'job-failed-retry',
+        url: 'https://www.youtube.com/watch?v=failed1',
+        title: 'Failed Video',
+        preset: { format: 'mp4', videoQuality: 'p720' },
+        status: 'failed',
+        errorMessage: 'Network error',
+      },
+      {
+        id: 'job-canceled-1',
+        url: 'https://www.youtube.com/watch?v=canceled1',
+        title: 'Canceled Video',
+        preset: { format: 'mp4', videoQuality: 'p720' },
+        status: 'canceled',
+      },
+    ];
+
+    render(
+      <ThemeProvider theme={theme}>
+        <DownloadQueue jobs={jobs} onRetryJob={handleRetry} />
+      </ThemeProvider>,
+    );
+
+    const retryBtns = screen.getAllByRole('button', { name: /relancer ce téléchargement/i });
+    expect(retryBtns).toHaveLength(1);
+
+    await user.click(retryBtns[0]);
+    expect(handleRetry).toHaveBeenCalledWith('job-failed-retry');
+  });
+
+  // 15. No Retry button on canceled or completed jobs
+  it('does not render any Retry button when no job failed', () => {
+    const theme = createAppTheme('dark');
+    const jobs: DownloadJobDto[] = [
+      {
+        id: 'job-canceled-only',
+        url: 'https://www.youtube.com/watch?v=canceled1',
+        title: 'Canceled Video',
+        preset: { format: 'mp4', videoQuality: 'p720' },
+        status: 'canceled',
+      },
+      {
+        id: 'job-completed-only',
+        url: 'https://www.youtube.com/watch?v=done1',
+        title: 'Done Video',
+        preset: { format: 'mp4', videoQuality: 'p720' },
+        status: 'completed',
+      },
+    ];
+
+    render(
+      <ThemeProvider theme={theme}>
+        <DownloadQueue jobs={jobs} onRetryJob={vi.fn()} />
+      </ThemeProvider>,
+    );
+
+    expect(
+      screen.queryByRole('button', { name: /relancer ce téléchargement/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  // 16. Closing the options dialog during analysis cancels it
+  it('invokes onClose (cancellation) when the dialog is closed while analyzing', async () => {
+    const user = userEvent.setup();
+    const handleClose = vi.fn();
+    const theme = createAppTheme('dark');
+
+    render(
+      <ThemeProvider theme={theme}>
+        <DownloadOptionsDialog
+          open={true}
+          onClose={handleClose}
+          probeResult={null}
+          isLoading={true}
+          defaultPreset={defaultPreset}
+          onConfirmDownload={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    // The Cancel button must stay enabled while loading, and closing must call onClose.
+    const cancelBtn = screen.getByRole('button', { name: /annuler/i });
+    expect(cancelBtn).not.toBeDisabled();
+    await user.click(cancelBtn);
+    expect(handleClose).toHaveBeenCalledTimes(1);
+  });
+
+  // 17. normalizeIpcError preserves every technical field
+  it('preserves retryable, details, component, exitCode and stderrTail in normalizeIpcError', () => {
+    const backendError = {
+      code: 'DOWNLOAD_PROCESS_FAILED',
+      message: 'Le processus a échoué.',
+      retryable: true,
+      details: {
+        code: 'DOWNLOAD_PROCESS_FAILED',
+        message: 'Le processus a échoué.',
+        retryable: true,
+        component: 'yt-dlp 2026.08.19',
+        exitCode: 1,
+        stderrTail: 'ERROR: boom\nERROR: bang',
+      },
+    };
+
+    const normalized = normalizeIpcError(backendError);
+    expect(normalized.code).toBe('DOWNLOAD_PROCESS_FAILED');
+    expect(normalized.retryable).toBe(true);
+    expect(normalized.details?.component).toBe('yt-dlp 2026.08.19');
+    expect(normalized.details?.exitCode).toBe(1);
+    expect(normalized.details?.stderrTail).toContain('ERROR: boom');
+
+    // Flat variants (component at top level) are also accepted.
+    const flat = normalizeIpcError({
+      code: 'NETWORK_UNAVAILABLE',
+      message: 'offline',
+      retryable: true,
+      component: 'yt-dlp',
+      exitCode: 3,
+      stderrTail: 'tail',
+    });
+    expect(flat.details?.component).toBe('yt-dlp');
+    expect(flat.details?.exitCode).toBe(3);
+    expect(flat.details?.stderrTail).toBe('tail');
+  });
+
+  // 18. Technical details panel shows component/exit code/stderr
+  it('shows a collapsible technical details panel for a failed job', async () => {
+    const user = userEvent.setup();
+    const theme = createAppTheme('dark');
+    const jobs: DownloadJobDto[] = [
+      {
+        id: 'job-with-details',
+        url: 'https://www.youtube.com/watch?v=boom',
+        title: 'Broken Video',
+        preset: { format: 'mp4', videoQuality: 'p720' },
+        status: 'failed',
+        errorMessage: 'Échec du processus',
+        errorDetails: {
+          code: 'DOWNLOAD_PROCESS_FAILED',
+          message: 'Échec du processus',
+          retryable: true,
+          component: 'yt-dlp 2026.08.19',
+          exitCode: 1,
+          stderrTail: 'ERROR: signature solving failed',
+        },
+      },
+    ];
+
+    render(
+      <ThemeProvider theme={theme}>
+        <DownloadQueue jobs={jobs} />
+      </ThemeProvider>,
+    );
+
+    const toggle = screen.getByRole('button', { name: /détails techniques/i });
+    expect(screen.queryByText(/signature solving failed/i)).not.toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(await screen.findByText(/signature solving failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/yt-dlp 2026.08.19/)).toBeInTheDocument();
+  });
+
+  // 19. Retry counter chip is visible only while the job is retried
+  it('renders the retry counter chip for a job being retried', () => {
+    const theme = createAppTheme('dark');
+    const jobs: DownloadJobDto[] = [
+      {
+        id: 'job-retrying',
+        url: 'https://www.youtube.com/watch?v=retry',
+        title: 'Retrying',
+        preset: { format: 'mp4', videoQuality: 'p720' },
+        status: 'downloading',
+        progressPercent: 10,
+        retryCount: 1,
+      },
+      {
+        id: 'job-plain',
+        url: 'https://www.youtube.com/watch?v=plain',
+        title: 'Plain',
+        preset: { format: 'mp4', videoQuality: 'p720' },
+        status: 'downloading',
+        progressPercent: 10,
+        retryCount: 0,
+      },
+    ];
+
+    render(
+      <ThemeProvider theme={theme}>
+        <DownloadQueue jobs={jobs} />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByText('Tentative 1/3')).toBeInTheDocument();
+    expect(screen.queryByText('Tentative 0/3')).not.toBeInTheDocument();
+  });
+
+  // 20. JavaScript runtime dialog: primary action pre-focused, installs on click
+  it('pre-focuses the Install button and calls installJsRuntime', async () => {
+    const user = userEvent.setup();
+    const installJsRuntime = vi.fn().mockResolvedValue({
+      kind: 'node',
+      version: '24.21.0',
+      path: '/tmp/node',
+      isReady: true,
+      versionTooOld: false,
+    });
+    const onInstalled = vi.fn();
+    const client = { installJsRuntime } as unknown as IpcClient;
+
+    render(
+      <JsRuntimeSetupDialog
+        open={true}
+        onClose={vi.fn()}
+        client={client}
+        hasActiveDownloads={false}
+        onInstalled={onInstalled}
+      />,
+    );
+
+    const installBtn = screen.getByRole('button', { name: /^installer$/i });
+    // The primary action is the keyboard default (Enter installs).
+    expect(installBtn).toHaveFocus();
+
+    await user.click(installBtn);
+    expect(installJsRuntime).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(onInstalled).toHaveBeenCalled();
+    });
+    expect(await screen.findByText(/Runtime JavaScript installé/i)).toBeInTheDocument();
+  });
+
+  // 21. The Later button is a secondary action and does not install
+  it('keeps the Later action inert and does not trigger installation', async () => {
+    const user = userEvent.setup();
+    const installJsRuntime = vi.fn();
+    const onClose = vi.fn();
+    const client = { installJsRuntime } as unknown as IpcClient;
+
+    render(
+      <JsRuntimeSetupDialog
+        open={true}
+        onClose={onClose}
+        client={client}
+        hasActiveDownloads={false}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /plus tard/i }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(installJsRuntime).not.toHaveBeenCalled();
   });
 });
