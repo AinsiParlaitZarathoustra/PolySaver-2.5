@@ -407,6 +407,13 @@ pub async fn query_binary_version(
 mod tests {
     use super::*;
 
+    // These three tests fabricate fake binaries as POSIX shell scripts and rely
+    // on the OS executing them (shebang + exec bit). A text file cannot be
+    // executed on Windows, so the mock would never resolve and the test would
+    // fail there for a reason unrelated to the resolver logic. The ordering
+    // policy itself is covered on every platform by
+    // `test_binary_kind_priority_policy` and `test_js_runtime_binary_kind_metadata`.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_resolver_cache_hit_and_invalidation() {
         let temp_dir = std::env::temp_dir().join(format!("binres_test_{}", uuid::Uuid::new_v4()));
@@ -459,6 +466,13 @@ mod tests {
         assert!(matches!(res, Ok(_) | Err(BinResError::NotFound { .. })));
     }
 
+    // These three tests fabricate fake binaries as POSIX shell scripts and rely
+    // on the OS executing them (shebang + exec bit). A text file cannot be
+    // executed on Windows, so the mock would never resolve and the test would
+    // fail there for a reason unrelated to the resolver logic. The ordering
+    // policy itself is covered on every platform by
+    // `test_binary_kind_priority_policy` and `test_js_runtime_binary_kind_metadata`.
+    #[cfg(unix)]
     /// The runtime-updated engine in `app_bin_dir` must win over the bundled
     /// resource binary, otherwise a downloaded update would never take effect.
     #[tokio::test]
@@ -505,6 +519,13 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&root).await;
     }
 
+    // These three tests fabricate fake binaries as POSIX shell scripts and rely
+    // on the OS executing them (shebang + exec bit). A text file cannot be
+    // executed on Windows, so the mock would never resolve and the test would
+    // fail there for a reason unrelated to the resolver logic. The ordering
+    // policy itself is covered on every platform by
+    // `test_binary_kind_priority_policy` and `test_js_runtime_binary_kind_metadata`.
+    #[cfg(unix)]
     /// Node/Deno installed by the app (in `app_bin_dir/<kind>/<name>`) must be
     /// found and take priority over any bundled resource.
     #[tokio::test]
