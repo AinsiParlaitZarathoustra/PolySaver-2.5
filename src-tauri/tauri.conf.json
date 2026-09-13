@@ -29,7 +29,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkxQUU0MDEzNDBDRjI3M0UKUldRK0o4OUFFMEN1a2JTZ0dJejVvbTR5anljRjZhOEt0Qkc1cHlQUTllOU05aUJhM21kNkYrL3EK",
       "endpoints": [
-        "https://github.com/AinsiParlaitZarathoustra/PolySaver/releases/latest/download/latest.json"
+        "https://github.com/AinsiParlaitZarathoustra/PolySaver-2.5/releases/latest/download/latest.json"
       ]
     }
   },

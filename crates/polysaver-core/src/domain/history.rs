@@ -179,6 +179,7 @@ impl DownloadHistoryEntry {
     }
 
     /// Reconstructs a history entry including its recorded download directory.
+    #[allow(clippy::too_many_arguments)]
     pub fn reconstruct_with_dir(
         id: HistoryEntryId,
         download_id: DownloadId,

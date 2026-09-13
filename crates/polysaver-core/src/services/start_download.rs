@@ -641,8 +641,7 @@ impl StartDownloadService {
             if job.status() != DownloadStatus::Completed {
                 let mut details =
                     DownloadErrorDetails::from_code(DownloadErrorCode::OutputFileNotFound);
-                details.message =
-                    format!("Le téléchargement '{job_id}' n'est pas encore terminé.");
+                details.message = format!("Le téléchargement '{job_id}' n'est pas encore terminé.");
                 return Err(CoreError::DownloadFailed(details));
             }
 
@@ -823,9 +822,8 @@ impl StartDownloadService {
                     sink.emit_warning(&crate::ports::event_sink::DownloadWarningEvent {
                         download_id: ctx.job_id,
                         code: "COOKIES_PERMISSION_DENIED".to_string(),
-                        message:
-                            "Accès refusé aux cookies du navigateur (autorisation manquante)."
-                                .to_string(),
+                        message: "Accès refusé aux cookies du navigateur (autorisation manquante)."
+                            .to_string(),
                     });
                 }
             }
@@ -1253,6 +1251,64 @@ pub fn sanitize_filename(title: &str) -> String {
             cleaned.to_string()
         }
     }
+}
+
+/// Maximum age before an orphaned `job_*` temporary directory is purged.
+///
+/// A directory younger than this may belong to a concurrently running instance,
+/// so it is left alone; anything older is the debris of a crash or a SIGKILL and
+/// would otherwise accumulate indefinitely (hundreds of MB have been observed).
+pub const ORPHAN_TEMP_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Removes `job_*` directories older than [`ORPHAN_TEMP_MAX_AGE`] from `temp_root`.
+///
+/// Returns the number of directories removed. A missing `temp_root` is not an
+/// error: nothing has been downloaded yet on a fresh installation.
+///
+/// Only the modification time is consulted, so no inter-process lock is needed.
+pub async fn purge_orphan_temp_dirs(temp_root: &Path) -> usize {
+    purge_orphan_temp_dirs_older_than(temp_root, ORPHAN_TEMP_MAX_AGE).await
+}
+
+/// Age-parameterized variant of [`purge_orphan_temp_dirs`], used by tests to
+/// avoid waiting a full day for the threshold.
+pub async fn purge_orphan_temp_dirs_older_than(
+    temp_root: &Path,
+    max_age: std::time::Duration,
+) -> usize {
+    let Ok(mut entries) = tokio::fs::read_dir(temp_root).await else {
+        return 0;
+    };
+
+    let now = std::time::SystemTime::now();
+    let mut removed = 0usize;
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("job_") {
+            continue;
+        }
+
+        let Ok(metadata) = entry.metadata().await else {
+            continue;
+        };
+        if !metadata.is_dir() {
+            continue;
+        }
+
+        let age = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .unwrap_or_default();
+
+        if age >= max_age && tokio::fs::remove_dir_all(entry.path()).await.is_ok() {
+            removed += 1;
+        }
+    }
+
+    removed
 }
 
 /// Emits a non-fatal warning when the published file could not be flushed to disk.

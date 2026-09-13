@@ -235,7 +235,12 @@ fn js_runtime_candidate_paths(kind: BinaryKind) -> Vec<PathBuf> {
                 candidates.push(PathBuf::from(&local).join("deno").join(deno_name));
             }
             if let Some(profile) = std::env::var_os("USERPROFILE") {
-                candidates.push(PathBuf::from(&profile).join(".deno").join("bin").join(deno_name));
+                candidates.push(
+                    PathBuf::from(&profile)
+                        .join(".deno")
+                        .join("bin")
+                        .join(deno_name),
+                );
             }
         } else {
             candidates.push(PathBuf::from("/opt/homebrew/bin").join(deno_name));
@@ -267,7 +272,10 @@ fn js_runtime_candidate_paths(kind: BinaryKind) -> Vec<PathBuf> {
             candidates.extend(latest_versioned_bin(&local.join("nvm"), name));
         }
         if let Some(appdata) = std::env::var_os("APPDATA") {
-            candidates.extend(latest_versioned_bin(&PathBuf::from(appdata).join("nvm"), name));
+            candidates.extend(latest_versioned_bin(
+                &PathBuf::from(appdata).join("nvm"),
+                name,
+            ));
         }
         return candidates;
     }
@@ -281,7 +289,13 @@ fn js_runtime_candidate_paths(kind: BinaryKind) -> Vec<PathBuf> {
     if let Some(ref home) = home {
         candidates.push(home.join(".volta").join("bin").join(name));
         candidates.push(home.join(".asdf").join("shims").join(name));
-        candidates.push(home.join(".local").join("share").join("mise").join("shims").join(name));
+        candidates.push(
+            home.join(".local")
+                .join("share")
+                .join("mise")
+                .join("shims")
+                .join(name),
+        );
         candidates.extend(latest_versioned_bin(
             &home.join(".nvm").join("versions").join("node"),
             name,

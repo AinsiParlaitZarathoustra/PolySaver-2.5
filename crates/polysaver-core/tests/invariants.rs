@@ -245,7 +245,10 @@ fn test_app_settings_path_policies() {
         Language::English,
     )
     .unwrap();
-    assert_eq!(audio_settings.default_preset(), DownloadPreset::mp3(Mp3Quality::K256));
+    assert_eq!(
+        audio_settings.default_preset(),
+        DownloadPreset::mp3(Mp3Quality::K256)
+    );
     assert_eq!(audio_settings.language(), Language::English);
 
     // Path validation: ~ prefix, relative path, empty path, null bytes rejected
@@ -305,7 +308,10 @@ fn test_settings_cookies_and_engine_channel() {
     assert_eq!(dto.schema_version, 1);
 
     let round_tripped = AppSettings::try_from(dto).unwrap();
-    assert_eq!(round_tripped.cookies_from_browser(), Some(CookiesBrowser::Firefox));
+    assert_eq!(
+        round_tripped.cookies_from_browser(),
+        Some(CookiesBrowser::Firefox)
+    );
     assert_eq!(round_tripped.engine_channel(), EngineChannel::Nightly);
 
     // Every supported browser serializes to the exact yt-dlp flag value.
@@ -343,7 +349,10 @@ fn test_settings_cookies_and_engine_channel() {
     let legacy_dto: AppSettingsDto = serde_json::from_str(legacy).unwrap();
     assert_eq!(legacy_dto.cookies_from_browser, None);
     assert_eq!(legacy_dto.engine_channel, EngineChannel::Stable);
-    assert_eq!(legacy_dto.schema_version, 0, "absent schema version means pre-versioning");
+    assert_eq!(
+        legacy_dto.schema_version, 0,
+        "absent schema version means pre-versioning"
+    );
     assert!(AppSettings::try_from(legacy_dto).is_ok());
 }
 
@@ -645,7 +654,9 @@ async fn test_retry_download_only_allows_failed_jobs() {
     assert!(matches!(early_retry, Err(CoreError::InvalidState(_))));
 
     // Unknown identifiers surface a clear not-found error.
-    let unknown_retry = service.retry_download(polysaver_core::domain::DownloadId::new()).await;
+    let unknown_retry = service
+        .retry_download(polysaver_core::domain::DownloadId::new())
+        .await;
     assert!(matches!(unknown_retry, Err(CoreError::JobNotFound(_))));
 
     // Wait for the download to fail, then retry it faithfully.
@@ -714,7 +725,10 @@ async fn test_failed_jobs_and_retries_do_not_write_history() {
 
     // Failing then retrying (still failing) must not produce any history entry.
     let history = service.list_history().await.unwrap();
-    assert!(history.is_empty(), "failed jobs must never be recorded in history");
+    assert!(
+        history.is_empty(),
+        "failed jobs must never be recorded in history"
+    );
     assert!(service
         .list_downloads()
         .await
@@ -789,7 +803,10 @@ fn test_language_serialization_and_defaults() {
     assert_eq!(dto.language, Language::French);
     assert_eq!(dto.download_directory, "/downloads");
     let legacy_settings = AppSettings::try_from(dto).unwrap();
-    assert_eq!(legacy_settings.default_preset(), DownloadPreset::mp3(Mp3Quality::K320));
+    assert_eq!(
+        legacy_settings.default_preset(),
+        DownloadPreset::mp3(Mp3Quality::K320)
+    );
 }
 
 // 18. ThemeMode serialization and deserialization
@@ -1124,10 +1141,8 @@ async fn test_history_file_path_confinement() {
         }
     }
 
-    let test_dir = std::env::temp_dir().join(format!(
-        "polysaver_confinement_{}",
-        uuid::Uuid::new_v4()
-    ));
+    let test_dir =
+        std::env::temp_dir().join(format!("polysaver_confinement_{}", uuid::Uuid::new_v4()));
     let downloads_dir = test_dir.join("downloads");
     tokio::fs::create_dir_all(&downloads_dir).await.unwrap();
 
@@ -1165,7 +1180,10 @@ async fn test_history_file_path_confinement() {
     )
     .unwrap();
     history_repo.append(inside_entry.clone()).await.unwrap();
-    let resolved = service.get_history_file_path(inside_entry.id()).await.unwrap();
+    let resolved = service
+        .get_history_file_path(inside_entry.id())
+        .await
+        .unwrap();
     assert!(resolved.ends_with("inside.mp4"));
 
     // Trafiquée entry: path outside the recorded directory must be refused.
@@ -1566,10 +1584,7 @@ async fn test_transient_failures_are_retried_until_success() {
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .clone();
-    assert_eq!(
-        warnings.iter().filter(|c| *c == "RETRY_ATTEMPT").count(),
-        2
-    );
+    assert_eq!(warnings.iter().filter(|c| *c == "RETRY_ATTEMPT").count(), 2);
 
     // Only the successful attempt writes history.
     let history = service.list_history().await.unwrap();
@@ -1593,8 +1608,7 @@ async fn test_transient_failures_are_retried_until_success() {
 
 #[tokio::test]
 async fn test_non_retryable_failure_is_immediate() {
-    let test_dir =
-        std::env::temp_dir().join(format!("polysaver_noretry_{}", uuid::Uuid::new_v4()));
+    let test_dir = std::env::temp_dir().join(format!("polysaver_noretry_{}", uuid::Uuid::new_v4()));
     let settings = AppSettings::defaults_for(test_dir.join("downloads")).unwrap();
     let repo = Arc::new(InMemorySettingsRepo {
         settings: RwLock::new(settings),
@@ -1646,8 +1660,7 @@ async fn test_non_retryable_failure_is_immediate() {
 
 #[tokio::test]
 async fn test_exhausted_retries_end_in_failed_with_original_error() {
-    let test_dir =
-        std::env::temp_dir().join(format!("polysaver_exhaust_{}", uuid::Uuid::new_v4()));
+    let test_dir = std::env::temp_dir().join(format!("polysaver_exhaust_{}", uuid::Uuid::new_v4()));
     let settings = AppSettings::defaults_for(test_dir.join("downloads")).unwrap();
     let repo = Arc::new(InMemorySettingsRepo {
         settings: RwLock::new(settings),
@@ -1715,7 +1728,9 @@ impl MediaDownloader for StaleEngineDownloader {
         }
 
         let file = request.temp_dir.join("video.mp4");
-        tokio::fs::write(&file, b"updated engine success").await.unwrap();
+        tokio::fs::write(&file, b"updated engine success")
+            .await
+            .unwrap();
         Ok(DownloadedStreams {
             raw_artifacts: vec![file.clone()],
             video_path: Some(file),
@@ -1735,8 +1750,7 @@ struct CountingEngineUpdater {
 #[async_trait::async_trait]
 impl polysaver_core::services::EngineUpdater for CountingEngineUpdater {
     async fn update_engine(&self) -> Result<String, CoreError> {
-        self.calls
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok("2026.09.01".to_string())
     }
 }
@@ -1854,4 +1868,61 @@ async fn test_failed_engine_update_keeps_original_error() {
     );
 
     let _ = tokio::fs::remove_dir_all(&test_dir).await;
+}
+
+// 22. Orphaned temp workspaces from a crash are purged, recent ones are kept
+#[tokio::test]
+async fn test_purge_orphan_temp_dirs_only_removes_old_entries() {
+    use polysaver_core::services::start_download::purge_orphan_temp_dirs_older_than;
+
+    let temp_root = std::env::temp_dir().join(format!("polysaver_purge_{}", uuid::Uuid::new_v4()));
+    tokio::fs::create_dir_all(&temp_root).await.unwrap();
+
+    // An old leftover from a killed run (contains a partial download).
+    let old_job = temp_root.join("job_11111111-1111-1111-1111-111111111111");
+    tokio::fs::create_dir_all(&old_job).await.unwrap();
+    tokio::fs::write(old_job.join("stream.part"), b"partial data")
+        .await
+        .unwrap();
+
+    // A recent workspace, possibly belonging to a concurrent instance.
+    let recent_job = temp_root.join("job_22222222-2222-2222-2222-222222222222");
+    tokio::fs::create_dir_all(&recent_job).await.unwrap();
+
+    // Unrelated directory names must never be touched.
+    let unrelated = temp_root.join("not_a_job_dir");
+    tokio::fs::create_dir_all(&unrelated).await.unwrap();
+
+    // A stray file named like a job directory is not a directory and stays.
+    let stray_file = temp_root.join("job_33333333-3333-3333-3333-333333333333");
+    tokio::fs::write(&stray_file, b"file, not dir")
+        .await
+        .unwrap();
+
+    // Zero threshold: every `job_*` directory qualifies as old, isolating the
+    // name/type logic from the age comparison.
+    let removed = purge_orphan_temp_dirs_older_than(&temp_root, std::time::Duration::ZERO).await;
+    assert_eq!(removed, 2, "only the two job_* directories are candidates");
+    assert!(!old_job.exists());
+    assert!(!recent_job.exists());
+    assert!(
+        stray_file.exists(),
+        "a file is never removed as a directory"
+    );
+    assert!(unrelated.exists(), "non job_* entries are left alone");
+
+    // With the real 24 h threshold, fresh directories survive.
+    let fresh = temp_root.join("job_44444444-4444-4444-4444-444444444444");
+    tokio::fs::create_dir_all(&fresh).await.unwrap();
+    let removed =
+        polysaver_core::services::start_download::purge_orphan_temp_dirs(&temp_root).await;
+    assert_eq!(removed, 0, "a just-created workspace must survive startup");
+    assert!(fresh.exists());
+
+    // A missing temp root is not an error.
+    let missing = temp_root.join("does_not_exist");
+    let removed = purge_orphan_temp_dirs_older_than(&missing, std::time::Duration::ZERO).await;
+    assert_eq!(removed, 0);
+
+    let _ = tokio::fs::remove_dir_all(&temp_root).await;
 }

@@ -17,9 +17,7 @@
 //! so no re-signing or `xattr` step is required.
 
 use crate::js_runtime::{pinned_node_version, verify_installed_runtime, JsRuntimeKind};
-use crate::updater::{
-    download_verified_to_file, hex_encode, parse_sha256sums, replace_binary,
-};
+use crate::updater::{download_verified_to_file, hex_encode, parse_sha256sums, replace_binary};
 use flate2::read::GzDecoder;
 use polysaver_core::error::CoreError;
 use sha2::{Digest, Sha256};
@@ -139,9 +137,10 @@ async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String, CoreE
         )));
     }
 
-    response.text().await.map_err(|err| {
-        CoreError::ProviderError(format!("Failed to read metadata response: {err}"))
-    })
+    response
+        .text()
+        .await
+        .map_err(|err| CoreError::ProviderError(format!("Failed to read metadata response: {err}")))
 }
 
 /// Official archive name for the current platform.
@@ -240,11 +239,7 @@ fn extract_node_binary(archive_path: &Path, dest: &Path) -> Result<(), CoreError
 }
 
 /// Copies the matching entry out of a tar stream.
-fn extract_from_tar<R: Read>(
-    reader: R,
-    binary_name: &str,
-    dest: &Path,
-) -> Result<(), CoreError> {
+fn extract_from_tar<R: Read>(reader: R, binary_name: &str, dest: &Path) -> Result<(), CoreError> {
     let mut archive = tar::Archive::new(reader);
     let entries = archive
         .entries()
@@ -258,11 +253,7 @@ fn extract_from_tar<R: Read>(
             .map_err(|err| CoreError::StorageError(format!("Invalid archive path: {err}")))?
             .to_path_buf();
 
-        let is_match = is_runtime_entry(
-            &path,
-            entry.header().entry_type().is_file(),
-            binary_name,
-        );
+        let is_match = is_runtime_entry(&path, entry.header().entry_type().is_file(), binary_name);
 
         if is_match {
             let mut output = std::fs::File::create(dest).map_err(|err| {
@@ -297,9 +288,9 @@ fn extract_from_zip<R: Read + std::io::Seek>(
             .by_index(index)
             .map_err(|err| CoreError::StorageError(format!("Corrupted zip entry: {err}")))?;
 
-        let is_match = entry.enclosed_name().is_some_and(|p| {
-            is_runtime_entry(&p, entry.is_file(), binary_name)
-        });
+        let is_match = entry
+            .enclosed_name()
+            .is_some_and(|p| is_runtime_entry(&p, entry.is_file(), binary_name));
 
         if is_match {
             let mut output = std::fs::File::create(dest).map_err(|err| {
@@ -371,7 +362,11 @@ mod tests {
             header.set_mode(0o755);
             header.set_cksum();
             builder
-                .append_data(&mut header, "node-v24.21.0-darwin-arm64/bin/node", &payload[..])
+                .append_data(
+                    &mut header,
+                    "node-v24.21.0-darwin-arm64/bin/node",
+                    &payload[..],
+                )
                 .unwrap();
             let encoder = builder.into_inner().unwrap();
             encoder.finish().unwrap();
@@ -491,7 +486,11 @@ mod tests {
             dir_header.set_mode(0o755);
             dir_header.set_cksum();
             builder
-                .append_data(&mut dir_header, "node-v24.21.0-darwin-arm64/include/node/", &[][..])
+                .append_data(
+                    &mut dir_header,
+                    "node-v24.21.0-darwin-arm64/include/node/",
+                    &[][..],
+                )
                 .unwrap();
 
             let payload = b"#!/bin/sh\necho 'v24.21.0'\n";

@@ -229,13 +229,10 @@ impl TryFrom<AppSettingsDto> for AppSettings {
 
     fn try_from(dto: AppSettingsDto) -> Result<Self, Self::Error> {
         let preset = DownloadPreset::try_from(dto.default_preset)?;
-        Ok(Self::new(
-            dto.download_directory,
-            dto.theme_mode,
-            preset,
-            dto.language,
-        )?
-        .with_cookies_from_browser(dto.cookies_from_browser)
-        .with_engine_channel(dto.engine_channel))
+        Ok(
+            Self::new(dto.download_directory, dto.theme_mode, preset, dto.language)?
+                .with_cookies_from_browser(dto.cookies_from_browser)
+                .with_engine_channel(dto.engine_channel),
+        )
     }
 }

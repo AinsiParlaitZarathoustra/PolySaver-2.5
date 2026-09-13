@@ -7,8 +7,8 @@
 //! multi-stream progress aggregation, and cancellation support.
 
 use crate::aggregator::MultiStreamProgressAggregator;
-use crate::error_classifier::{classify_ytdlp_error, is_outdated_engine_message};
 use crate::detect_cookies_diagnostic;
+use crate::error_classifier::{classify_ytdlp_error, is_outdated_engine_message};
 use polysaver_core::error::{CoreError, DownloadErrorCode, DownloadErrorDetails};
 use polysaver_core::ports::media_downloader::StreamProgress;
 use regex::Regex;
@@ -89,6 +89,12 @@ impl YtDlpProcessRunner {
         cmd.stderr(Stdio::piped());
         cmd.kill_on_drop(true);
 
+        // Own process group on Unix: yt-dlp spawns ffmpeg for muxing, and killing
+        // only the direct child would leave ffmpeg running after a cancellation.
+        // The whole group is signalled on cancel (see below).
+        #[cfg(unix)]
+        cmd.process_group(0);
+
         let mut child = cmd.spawn().map_err(|err| {
             let mut details = DownloadErrorDetails::from_code(DownloadErrorCode::YtdlpStartFailed);
             details.message = format!("Impossible de lancer le moteur de téléchargement: {err}");
@@ -167,8 +173,11 @@ impl YtDlpProcessRunner {
                         parse_polysaver_progress_line_with_stream(&trimmed)
                     {
                         let mut agg_lock = aggregator_ref.lock().await;
-                        let agg_progress =
-                            agg_lock.feed_with_status(stream_id.as_deref(), &parsed, status_finished);
+                        let agg_progress = agg_lock.feed_with_status(
+                            stream_id.as_deref(),
+                            &parsed,
+                            status_finished,
+                        );
                         if let Some(ref callback) = cb {
                             callback(agg_progress);
                         }
@@ -200,8 +209,7 @@ impl YtDlpProcessRunner {
                     })?
                 }
                 _ = token.cancelled() => {
-                    let _ = child.start_kill();
-                    let _ = child.wait().await;
+                    terminate_process_group(&mut child).await;
                     let _ = tokio::join!(stdout_task, stderr_task);
                     return Err(CoreError::OperationCancelled);
                 }
@@ -277,6 +285,42 @@ impl YtDlpProcessRunner {
             cookies_diagnostic,
         })
     }
+}
+
+/// Terminates the child process and every process it spawned.
+///
+/// yt-dlp runs ffmpeg as a subprocess during muxing. Since the child is started
+/// in its own process group (Unix), signalling the group kills both; on Windows
+/// only the direct child is terminated, which is documented behaviour there.
+async fn terminate_process_group(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            // Negative pid targets the whole process group.
+            let pgid = -(pid as i32);
+            if libc_kill(pgid) == 0 {
+                let _ = child.wait().await;
+                return;
+            }
+        }
+    }
+
+    // Fallback (and Windows path): kill the direct child only.
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+}
+
+/// Sends SIGKILL to a process group. Isolated so the FFI call stays tiny.
+#[cfg(unix)]
+fn libc_kill(pid: i32) -> i32 {
+    // SIGKILL = 9 on every Unix we support. `kill` is async-signal-safe and we
+    // only ever pass a pid of a child we spawned in its own process group.
+    unsafe { kill(pid, 9) }
+}
+
+#[cfg(unix)]
+extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
 }
 
 /// Parses early media metadata printed before download.
@@ -540,7 +584,8 @@ mod tests {
 
     #[test]
     fn test_parse_polysaver_meta_line_missing_sizes() {
-        let line = "[POLYSAVER_META] title:Odd\tduration:NA\tf0:602|NA\tfallback_id:NA\tfallback_size:NA";
+        let line =
+            "[POLYSAVER_META] title:Odd\tduration:NA\tf0:602|NA\tfallback_id:NA\tfallback_size:NA";
         let meta = parse_polysaver_meta_line(line).unwrap();
         assert_eq!(meta.title, Some("Odd".to_string()));
         assert_eq!(meta.duration_seconds, None);
@@ -558,5 +603,97 @@ mod tests {
             parsed.speed_bytes_per_second,
             Some((2.5 * 1024.0 * 1024.0) as u64)
         );
+    }
+
+    /// Cancelling must kill the whole process group, so a grandchild process
+    /// (as ffmpeg is for yt-dlp) cannot survive the cancellation.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_cancellation_kills_process_group_including_grandchildren() {
+        let dir = std::env::temp_dir().join(format!("polysaver_pg_{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        // Script that spawns a long-lived grandchild and reports its pid, then
+        // waits forever itself. Mirrors yt-dlp -> ffmpeg.
+        let script = dir.join("parent.sh");
+        let pid_file = dir.join("grandchild.pid");
+        tokio::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n/bin/sleep 300 &\necho $! > '{pid}'\nwhile true; do /bin/sleep 1; done\n",
+                pid = pid_file.display()
+            ),
+        )
+        .await
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let token = CancellationToken::new();
+        let token_for_cancel = token.clone();
+
+        let runner = tokio::spawn({
+            let script = script.clone();
+            let dir = dir.clone();
+            async move {
+                YtDlpProcessRunner::run(
+                    &script,
+                    None,
+                    &[],
+                    &dir,
+                    Some(&token_for_cancel),
+                    None,
+                    None,
+                )
+                .await
+            }
+        });
+
+        // Wait until the grandchild pid has been recorded.
+        let mut grandchild_pid = 0i32;
+        for _ in 0..100 {
+            if let Ok(content) = tokio::fs::read_to_string(&pid_file).await {
+                if let Ok(pid) = content.trim().parse::<i32>() {
+                    grandchild_pid = pid;
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(grandchild_pid > 0, "grandchild process never started");
+
+        // The grandchild is alive before cancellation.
+        assert!(
+            libc_kill_check(grandchild_pid),
+            "grandchild should be running before cancellation"
+        );
+
+        token.cancel();
+        let result = runner.await.unwrap();
+        assert!(matches!(result, Err(CoreError::OperationCancelled)));
+
+        // Give the OS a moment to reap, then assert the grandchild is gone.
+        let mut gone = false;
+        for _ in 0..40 {
+            if !libc_kill_check(grandchild_pid) {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            gone,
+            "grandchild process {grandchild_pid} survived the cancellation"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    /// Returns true when `pid` still exists (signal 0 performs error checking only).
+    #[cfg(unix)]
+    fn libc_kill_check(pid: i32) -> bool {
+        unsafe { kill(pid, 0) == 0 }
     }
 }

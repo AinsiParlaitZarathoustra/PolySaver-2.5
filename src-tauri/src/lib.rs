@@ -5,6 +5,11 @@
 //!
 //! Wires peripheral adapters into the sovereign core services and registers Tauri IPC commands.
 
+// `IpcError` embeds structured download details and is deliberately not boxed:
+// it is the serialized IPC contract consumed by the frontend, and Tauri commands
+// must return it by value. Boxing it would only add an allocation per command.
+#![allow(clippy::result_large_err)]
+
 pub mod app_state;
 pub mod commands;
 pub mod dto;
@@ -51,6 +56,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&app_config_dir)?;
             std::fs::create_dir_all(&default_download_dir)?;
 
+            // Purge leftover job_* workspaces from a previous crash or SIGKILL.
+            // Anything younger than 24 h is left untouched so a concurrently
+            // running instance never loses its in-flight temp files.
+            let purged = tauri::async_runtime::block_on(
+                polysaver_core::services::start_download::purge_orphan_temp_dirs(&temp_dir),
+            );
+            if purged > 0 {
+                eprintln!("[PolySaver] Purged {purged} orphaned temporary job director(ies)");
+            }
+
             let default_settings =
                 polysaver_core::domain::AppSettings::defaults_for(&default_download_dir)?;
 
@@ -78,10 +93,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     ytdlp_downloader.set_cookies_from_browser(settings.cookies_from_browser()),
                 );
             }
-            let detected_runtime =
-                tauri::async_runtime::block_on(polysaver_ytdlp::js_runtime::detect_js_runtime(
-                    &resolver,
-                ));
+            let detected_runtime = tauri::async_runtime::block_on(
+                polysaver_ytdlp::js_runtime::detect_js_runtime(&resolver),
+            );
             tauri::async_runtime::block_on(
                 ytdlp_downloader.set_js_runtime(detected_runtime.to_spec()),
             );

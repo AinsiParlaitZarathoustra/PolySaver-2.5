@@ -194,12 +194,9 @@ impl MultiStreamProgressAggregator {
             if self.seen_ids.iter().any(|s| s == id) {
                 continue;
             }
-            match size {
-                Some(s) => total = total.saturating_add(*s),
-                // A pending stream without an advertised size makes the global
-                // total unknowable, so no percentage should be claimed.
-                None => return None,
-            }
+            // A pending stream without an advertised size makes the global
+            // total unknowable, so no percentage should be claimed.
+            total = total.saturating_add((*size)?);
         }
         Some(total)
     }
@@ -263,10 +260,18 @@ impl MultiStreamProgressAggregator {
     #[must_use]
     pub fn finish(&self) -> StreamProgress {
         let downloaded = self.completed_bytes + self.current.as_ref().map_or(0, |c| c.downloaded);
-        let total = self.compute_total().or(if downloaded > 0 { Some(downloaded) } else { None });
+        let total = self.compute_total().or(if downloaded > 0 {
+            Some(downloaded)
+        } else {
+            None
+        });
         StreamProgress {
             percent: Some(100),
-            downloaded_bytes: if downloaded > 0 { Some(downloaded) } else { None },
+            downloaded_bytes: if downloaded > 0 {
+                Some(downloaded)
+            } else {
+                None
+            },
             total_bytes: total,
             total_bytes_estimate: None,
             speed_bytes_per_second: None,

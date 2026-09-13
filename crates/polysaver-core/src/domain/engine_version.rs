@@ -51,11 +51,7 @@ pub fn is_version_outdated(version: &str, today: (i32, u32, u32)) -> bool {
 #[must_use]
 pub fn compare_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
     let parse = |v: &str| -> Option<Vec<u64>> {
-        let parts: Option<Vec<u64>> = v
-            .trim()
-            .split('.')
-            .map(|p| p.parse::<u64>().ok())
-            .collect();
+        let parts: Option<Vec<u64>> = v.trim().split('.').map(|p| p.parse::<u64>().ok()).collect();
         let parts = parts?;
         if parts.is_empty() {
             None

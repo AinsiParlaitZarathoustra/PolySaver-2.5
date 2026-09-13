@@ -2,10 +2,9 @@
 // Copyright (C) 2026 PolySaver contributors
 
 use crate::app_state::AppState;
-use crate::dto::{
-    EngineUpdateResultDto, EngineUpdateStatusDto, IpcError, JsRuntimeStatusDto,
-};
+use crate::dto::{EngineUpdateResultDto, EngineUpdateStatusDto, IpcError, JsRuntimeStatusDto};
 use polysaver_binres::{BinaryKind, BinaryResolver};
+use polysaver_core::domain::engine_version::compare_versions;
 use polysaver_core::domain::EngineChannel;
 use polysaver_core::error::CoreError;
 use polysaver_core::ports::SettingsRepository;
@@ -84,19 +83,12 @@ async fn current_engine_version(state: &AppState) -> Result<String, IpcError> {
 
 /// Reads the configured channel from persisted settings (stable by default).
 async fn configured_channel(state: &AppState) -> Result<EngineChannel, IpcError> {
-    let settings = state
-        .settings_repo
-        .load()
-        .await
-        .map_err(IpcError::from)?;
+    let settings = state.settings_repo.load().await.map_err(IpcError::from)?;
     Ok(settings.engine_channel())
 }
 
 /// Builds an updater bound to the configured channel.
-fn build_updater(
-    state: &AppState,
-    channel: EngineChannel,
-) -> Result<YtDlpUpdater, IpcError> {
+fn build_updater(state: &AppState, channel: EngineChannel) -> Result<YtDlpUpdater, IpcError> {
     YtDlpUpdater::with_channel(
         state.app_bin_dir.clone(),
         Some(state.engine_update_cache_file.clone()),
@@ -162,6 +154,22 @@ fn active_job_count(jobs: &[polysaver_core::domain::DownloadJob]) -> usize {
         .count()
 }
 
+/// Returns true when the installed engine already matches the remote release.
+///
+/// The comparison is strictly by version, never by age. A local build older than
+/// 90 days is only an advisory warning shown in the UI (`outdated`); it must not
+/// trigger a re-download of an identical ~40 MB release.
+fn engine_is_current(current: &str, latest: Option<&str>) -> bool {
+    match latest {
+        Some(latest) => matches!(
+            compare_versions(current, latest),
+            Some(std::cmp::Ordering::Equal)
+        ),
+        // Unknown remote version: cannot claim we are up to date.
+        None => false,
+    }
+}
+
 /// IPC command downloading, verifying, and installing the configured engine release.
 ///
 /// Refused while download jobs are active. When the installed version already
@@ -182,15 +190,15 @@ pub async fn update_engine(state: State<'_, AppState>) -> Result<EngineUpdateRes
     let current_version = current_engine_version(&state).await.unwrap_or_default();
 
     // Skip the ~40 MB download when the remote release is the one we already run.
+    // Note: `status.outdated` is deliberately ignored here — it reflects the
+    // advisory 90-day age warning, not the need for a download.
     if let Ok(status) = updater.check_update(Some(&current_version)).await {
-        if !status.outdated && !status.can_update {
-            if let Some(latest) = status.latest_version {
-                return Ok(EngineUpdateResultDto {
-                    installed_version: current_version,
-                    updated: false,
-                    latest_version: Some(latest),
-                });
-            }
+        if engine_is_current(&current_version, status.latest_version.as_deref()) {
+            return Ok(EngineUpdateResultDto {
+                installed_version: current_version,
+                updated: false,
+                latest_version: status.latest_version,
+            });
         }
     }
 
@@ -206,7 +214,9 @@ pub async fn update_engine(state: State<'_, AppState>) -> Result<EngineUpdateRes
 
 /// IPC command restoring the engine binary backed up before the last update.
 #[tauri::command]
-pub async fn rollback_engine(state: State<'_, AppState>) -> Result<EngineUpdateResultDto, IpcError> {
+pub async fn rollback_engine(
+    state: State<'_, AppState>,
+) -> Result<EngineUpdateResultDto, IpcError> {
     let active = active_job_count(&state.start_download_service.list_downloads().await);
     if active > 0 {
         return Err(IpcError::new(
@@ -351,14 +361,35 @@ mod tests {
         canceled.transition_to_canceled().unwrap();
 
         assert_eq!(active_job_count(&[]), 0);
-        assert_eq!(active_job_count(&[completed.clone()]), 0);
+        assert_eq!(active_job_count(std::slice::from_ref(&completed)), 0);
         assert_eq!(active_job_count(&[completed, failed]), 0);
         assert_eq!(active_job_count(&[canceled]), 0);
 
         // Any non-terminal job blocks an engine update.
-        assert_eq!(active_job_count(&[queued.clone()]), 1);
-        assert_eq!(active_job_count(&[downloading.clone()]), 1);
+        assert_eq!(active_job_count(std::slice::from_ref(&queued)), 1);
+        assert_eq!(active_job_count(std::slice::from_ref(&downloading)), 1);
         assert_eq!(active_job_count(&[queued.clone(), downloading]), 2);
         assert_eq!(queued.status(), DownloadStatus::Queued);
+    }
+
+    /// An identical remote version must never trigger a re-download, even when
+    /// the local build is older than the advisory 90-day threshold.
+    #[test]
+    fn test_engine_is_current_compares_versions_not_age() {
+        // Same version: nothing to do (this is the regression the test pins).
+        assert!(engine_is_current("2026.08.19", Some("2026.08.19")));
+        // Trailing revision components compare as zero-padded on the right.
+        assert!(!engine_is_current("2026.08.19", Some("2026.08.19.1")));
+        assert!(!engine_is_current("2026.08.19", Some("2026.09.01")));
+        // A nightly build newer than stable is not "current" either.
+        assert!(!engine_is_current("2026.08.19", Some("2026.08.30.232658")));
+        assert!(engine_is_current(
+            "2026.08.30.232658",
+            Some("2026.08.30.232658")
+        ));
+        // Unknown remote version means we cannot claim to be up to date.
+        assert!(!engine_is_current("2026.08.19", None));
+        // Unparseable versions are never treated as equal.
+        assert!(!engine_is_current("nightly", Some("nightly")));
     }
 }

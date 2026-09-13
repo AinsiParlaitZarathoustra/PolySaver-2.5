@@ -251,7 +251,9 @@ impl JsonDownloadHistoryRepository {
                     // Reject documents written by an unknown future schema version
                     // instead of silently misinterpreting their fields.
                     let version = match &op {
-                        HistoryJournalOp::Upsert { v, .. } | HistoryJournalOp::Remove { v, .. } => *v,
+                        HistoryJournalOp::Upsert { v, .. } | HistoryJournalOp::Remove { v, .. } => {
+                            *v
+                        }
                     };
                     if version > HISTORY_SCHEMA_VERSION {
                         eprintln!(
@@ -301,9 +303,10 @@ impl JsonDownloadHistoryRepository {
 
         // Export rejected lines if any complete line was corrupted
         if !rejected_lines.is_empty() {
-            let rejected_backup = self
-                .config_dir
-                .join(format!("{NDJSON_HISTORY_FILE_NAME}.rejected_{}", unique_suffix()));
+            let rejected_backup = self.config_dir.join(format!(
+                "{NDJSON_HISTORY_FILE_NAME}.rejected_{}",
+                unique_suffix()
+            ));
             let _ = tokio::fs::write(&rejected_backup, rejected_lines.join("\n").as_bytes()).await;
             self.prune_rejected_backups().await;
         }

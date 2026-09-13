@@ -17,7 +17,9 @@ pub async fn health_check(state: State<'_, AppState>) -> Result<HealthResponse, 
     // this field stays a neutral technical description.
     let status_message = match (runtime.kind, &runtime.version) {
         (Some(kind), Some(version)) => format!("{} {version} detected", kind.as_str()),
-        _ if runtime.version_too_old => "detected runtime is below the required version".to_string(),
+        _ if runtime.version_too_old => {
+            "detected runtime is below the required version".to_string()
+        }
         _ => "no JavaScript runtime detected".to_string(),
     };
 

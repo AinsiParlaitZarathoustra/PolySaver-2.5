@@ -159,7 +159,8 @@ async fn probe_kind(resolver: &BinaryResolver, kind: JsRuntimeKind) -> Option<Js
         JsRuntimeKind::Node => MIN_NODE_VERSION,
     };
 
-    let version = parse_runtime_version(kind, &resolved.version).unwrap_or(resolved.version.clone());
+    let version =
+        parse_runtime_version(kind, &resolved.version).unwrap_or(resolved.version.clone());
     let meets = version_meets_minimum(&version, minimum);
 
     Some(JsRuntimeStatus {
@@ -207,7 +208,10 @@ pub fn pinned_node_version() -> &'static str {
 }
 
 /// Verifies an installed runtime binary reports a supported version.
-pub async fn verify_installed_runtime(path: &Path, kind: JsRuntimeKind) -> Result<String, CoreError> {
+pub async fn verify_installed_runtime(
+    path: &Path,
+    kind: JsRuntimeKind,
+) -> Result<String, CoreError> {
     let output = tokio::process::Command::new(path)
         .arg("--version")
         .output()
@@ -267,7 +271,10 @@ mod tests {
             Some("22.11.0".to_string())
         );
         // Garbage output must not produce a version.
-        assert_eq!(parse_runtime_version(JsRuntimeKind::Node, "command not found"), None);
+        assert_eq!(
+            parse_runtime_version(JsRuntimeKind::Node, "command not found"),
+            None
+        );
         assert_eq!(parse_runtime_version(JsRuntimeKind::Node, ""), None);
     }
 
@@ -292,7 +299,10 @@ mod tests {
         // Node: 22.0.0 required.
         assert!(version_meets_minimum("22.0.0", MIN_NODE_VERSION));
         assert!(version_meets_minimum("24.21.0", MIN_NODE_VERSION));
-        assert!(version_meets_minimum("v24.21.0".trim_start_matches('v'), MIN_NODE_VERSION));
+        assert!(version_meets_minimum(
+            "v24.21.0".trim_start_matches('v'),
+            MIN_NODE_VERSION
+        ));
         assert!(!version_meets_minimum("21.7.3", MIN_NODE_VERSION));
         assert!(!version_meets_minimum("20.0.0", MIN_NODE_VERSION));
 
@@ -347,10 +357,8 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let dir = std::env::temp_dir().join(format!(
-                "polysaver_jstest_{}",
-                uuid::Uuid::new_v4()
-            ));
+            let dir =
+                std::env::temp_dir().join(format!("polysaver_jstest_{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&dir).unwrap();
 
             let fake = dir.join("node");

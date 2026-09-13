@@ -19,7 +19,9 @@
 //! 5. SHA-256 verified in streaming mode while the file is written; a mismatch
 //!    aborts without touching the installed binary.
 
-use polysaver_core::domain::engine_version::{compare_versions, current_utc_date, is_version_outdated};
+use polysaver_core::domain::engine_version::{
+    compare_versions, current_utc_date, is_version_outdated,
+};
 use polysaver_core::domain::media_url::is_public_ip;
 use polysaver_core::error::CoreError;
 use reqwest::redirect;
@@ -175,7 +177,10 @@ impl YtDlpUpdater {
             (None, Some(_)) => true,
             (Some(current), Some(latest)) => {
                 // Only offer an update when the remote release is strictly newer.
-                matches!(compare_versions(latest, current), Some(std::cmp::Ordering::Greater))
+                matches!(
+                    compare_versions(latest, current),
+                    Some(std::cmp::Ordering::Greater)
+                )
             }
         };
 
@@ -514,11 +519,11 @@ impl reqwest::dns::Resolve for PinnedPublicResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         Box::pin(async move {
             let host = name.as_str().to_string();
-            let resolved = tokio::net::lookup_host((host.as_str(), 0))
-                .await
-                .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> {
+            let resolved = tokio::net::lookup_host((host.as_str(), 0)).await.map_err(
+                |err| -> Box<dyn std::error::Error + Send + Sync> {
                     format!("DNS resolution failed for '{host}': {err}").into()
-                })?;
+                },
+            )?;
 
             let addrs: Vec<SocketAddr> = resolved.filter(|addr| is_public_ip(addr.ip())).collect();
             if addrs.is_empty() {
@@ -593,9 +598,11 @@ pub(crate) async fn replace_binary(temp_path: &Path, final_path: &Path) -> Resul
     if final_path.exists() {
         let backup = final_path.with_extension("old");
         let _ = tokio::fs::remove_file(&backup).await;
-        tokio::fs::rename(final_path, &backup).await.map_err(|err| {
-            CoreError::StorageError(format!("Failed to move existing engine aside: {err}"))
-        })?;
+        tokio::fs::rename(final_path, &backup)
+            .await
+            .map_err(|err| {
+                CoreError::StorageError(format!("Failed to move existing engine aside: {err}"))
+            })?;
         match tokio::fs::rename(temp_path, final_path).await {
             Ok(()) => {
                 // Best effort: fails while the old binary is still running and is
@@ -614,7 +621,9 @@ pub(crate) async fn replace_binary(temp_path: &Path, final_path: &Path) -> Resul
     } else {
         tokio::fs::rename(temp_path, final_path)
             .await
-            .map_err(|err| CoreError::StorageError(format!("Failed to install engine binary: {err}")))
+            .map_err(|err| {
+                CoreError::StorageError(format!("Failed to install engine binary: {err}"))
+            })
     }
 }
 
@@ -624,7 +633,9 @@ async fn query_installed_version(binary: &Path) -> Result<String, CoreError> {
         .arg("--version")
         .output()
         .await
-        .map_err(|err| CoreError::ProviderError(format!("Failed to run installed engine: {err}")))?;
+        .map_err(|err| {
+            CoreError::ProviderError(format!("Failed to run installed engine: {err}"))
+        })?;
     if !output.status.success() {
         return Err(CoreError::ProviderError(
             "The installed engine failed to report its version".to_string(),
@@ -724,8 +735,7 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  yt-dlp.exe
             &Url::parse("https://release-assets.githubusercontent.com/asset").unwrap()
         ));
         assert!(is_allowed_engine_url(
-            &Url::parse("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
-                .unwrap()
+            &Url::parse("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest").unwrap()
         ));
     }
 
@@ -816,7 +826,9 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  yt-dlp.exe
         assert_eq!(tokio::fs::read(&final_path).await.unwrap(), b"fake-binary");
 
         // Replacing an existing binary must succeed on every platform.
-        tokio::fs::write(&temp_path, b"fake-binary-v2").await.unwrap();
+        tokio::fs::write(&temp_path, b"fake-binary-v2")
+            .await
+            .unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -867,7 +879,9 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  yt-dlp.exe
             let mode = std::fs::metadata(&installed).unwrap().permissions().mode();
             assert_eq!(mode & 0o111, 0o111, "installed binary must be executable");
         }
-        assert!(!dir.join(format!("{}.new", engine_binary_file_name())).exists());
+        assert!(!dir
+            .join(format!("{}.new", engine_binary_file_name()))
+            .exists());
 
         // 3. The repository resolver must now prefer this updated binary.
         let resolver = polysaver_binres::BinaryResolver::new(dir.clone(), None);

@@ -260,9 +260,7 @@ mod tests {
             DownloadErrorCode::RateLimited
         );
 
-        let format = vec![
-            "ERROR: Requested format is not available; update yt-dlp".to_string(),
-        ];
+        let format = vec!["ERROR: Requested format is not available; update yt-dlp".to_string()];
         assert_eq!(
             classify_ytdlp_error(Some(1), &format, None).code,
             DownloadErrorCode::FormatNotAvailable
