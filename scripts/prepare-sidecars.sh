@@ -8,8 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TARGET_BIN_DIR="${ROOT_DIR}/src-tauri/resources/bin"
 
-# Pinned exact versions
-YTDLP_VERSION="2026.08.19"
+# Pinned exact versions (yt-dlp version is centralized in ytdlp-version.txt)
+YTDLP_VERSION="$(tr -d '[:space:]' < "${ROOT_DIR}/ytdlp-version.txt")"
 FFMPEG_VERSION="9.0.1"
 
 # Target platform selection (default: auto-detect)

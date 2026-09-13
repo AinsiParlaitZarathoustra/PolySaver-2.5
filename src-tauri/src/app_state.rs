@@ -14,4 +14,9 @@ pub struct AppState {
     pub settings_repo: Arc<dyn SettingsRepository>,
     pub resolver: Arc<BinaryResolver>,
     pub home_dir: std::path::PathBuf,
+    pub app_bin_dir: std::path::PathBuf,
+    pub engine_update_cache_file: std::path::PathBuf,
+    pub engine_updater: Arc<dyn polysaver_core::services::EngineUpdater>,
+    /// Shared yt-dlp adapter, used to apply settings that affect yt-dlp arguments.
+    pub ytdlp_downloader: Arc<polysaver_ytdlp::YtDlpDownloader>,
 }

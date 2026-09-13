@@ -233,3 +233,18 @@ pub async fn cancel_download(
         .map_err(IpcError::from)?;
     Ok(DownloadJobDto::from(&job))
 }
+
+/// IPC command re-queueing a failed job as a new queued entry preserving URL, preset and directory.
+#[tauri::command]
+pub async fn retry_download(
+    state: State<'_, AppState>,
+    download_id: String,
+) -> Result<DownloadJobDto, IpcError> {
+    let job_id = DownloadId::try_from(download_id.as_str()).map_err(IpcError::from)?;
+    let job = state
+        .start_download_service
+        .retry_download(job_id)
+        .await
+        .map_err(IpcError::from)?;
+    Ok(DownloadJobDto::from(&job))
+}

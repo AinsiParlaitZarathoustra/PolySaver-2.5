@@ -3,8 +3,10 @@
 
 pub mod analyze;
 pub mod limiter;
+pub mod retry;
 pub mod start_download;
 
 pub use analyze::AnalyzeUrlService;
 pub use limiter::{ConcurrencyLimiter, ConcurrencyPermit};
-pub use start_download::StartDownloadService;
+pub use retry::RetryPolicy;
+pub use start_download::{EngineUpdater, StartDownloadService};

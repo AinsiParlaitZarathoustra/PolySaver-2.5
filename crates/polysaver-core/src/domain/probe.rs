@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// Canonical metadata about an analyzed media format option.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FormatOption {
     pub format_id: String,
@@ -16,11 +16,15 @@ pub struct FormatOption {
     pub has_audio: bool,
     pub extension: String,
     pub filesize_approx_bytes: Option<u64>,
+    /// Average total bitrate in kbps, when reported by the provider.
+    /// Used as a size fallback (`duration * tbr`) for HLS/DASH formats that
+    /// cannot expose `filesize_approx_bytes`.
+    pub tbr: Option<f64>,
     pub note: Option<String>,
 }
 
 /// Canonical result of probing a media URL.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeResult {
     pub url: MediaUrl,

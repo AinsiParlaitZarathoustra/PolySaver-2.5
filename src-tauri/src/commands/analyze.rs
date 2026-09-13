@@ -19,3 +19,10 @@ pub async fn analyze_url(
         .map_err(IpcError::from)?;
     Ok(ProbeResultDto::from(&result))
 }
+
+/// IPC command canceling the currently running URL analysis immediately.
+#[tauri::command]
+pub async fn cancel_analyze(state: State<'_, AppState>) -> Result<(), IpcError> {
+    state.analyze_service.cancel_current().await;
+    Ok(())
+}

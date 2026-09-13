@@ -35,13 +35,11 @@ impl InMemorySettingsRepository {
                 AppSettings::new(
                     "/tmp/polysaver_tests".to_string(),
                     polysaver_core::domain::ThemeMode::System,
-                    false,
                     polysaver_core::domain::DownloadPreset::video(
                         polysaver_core::domain::OutputFormat::Mp4,
                         polysaver_core::domain::VideoQuality::Best,
                     )
                     .unwrap(),
-                    3,
                     polysaver_core::domain::Language::French,
                 )
                 .unwrap()
@@ -116,9 +114,7 @@ mod tests {
         let custom = AppSettings::new(
             "/custom/download/path".to_string(),
             ThemeMode::Light,
-            false,
             custom_preset,
-            6,
             Language::English,
         )
         .unwrap();
@@ -130,9 +126,7 @@ mod tests {
         let loaded_custom = repo2.load().await.unwrap();
         assert_eq!(loaded_custom.download_directory(), "/custom/download/path");
         assert_eq!(loaded_custom.theme_mode(), ThemeMode::Light);
-        assert!(!loaded_custom.parallel_downloads());
         assert_eq!(loaded_custom.default_preset(), custom_preset);
-        assert_eq!(loaded_custom.max_concurrent(), 6);
         assert_eq!(loaded_custom.language(), Language::English);
 
         // 4. Test backward-compatibility migration of legacy ~/Downloads/PolySaver
