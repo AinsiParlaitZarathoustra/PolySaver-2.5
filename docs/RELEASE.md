@@ -108,6 +108,16 @@ When `prepare-sidecars.sh` fails on a 404 for `BtbN/FFmpeg-Builds`:
 The script now prints these instructions itself when a download fails, instead of
 surfacing a bare curl error.
 
+## Tests must wait for state, never sleep a fixed duration
+
+The download pipeline runs in a background task. Tests that assert on its outcome
+must poll for the expected state (`wait_for_terminal`, `wait_for_history`,
+`wait_until` in `crates/polysaver-core/tests/invariants.rs`), never `sleep` for a
+fixed number of milliseconds. Fixed sleeps are what made the Linux CI leg fail
+while macOS passed on the very same commit: the runner was simply slower than the
+development machine. The polling helpers allow up to 10 s and return as soon as the
+state is reached, so they are both faster locally and reliable on CI.
+
 ## Runner notes
 
 - `ubuntu-22.04` is used deliberately for the Linux build: it is the last runner

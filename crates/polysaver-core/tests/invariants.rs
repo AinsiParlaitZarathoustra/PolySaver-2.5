@@ -21,6 +21,62 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Polls `check` until it returns true or `timeout` elapses.
+///
+/// The download pipeline runs in a background task, so tests must wait for a
+/// state instead of sleeping a fixed amount: a fixed sleep is flaky whenever the
+/// CI runner is slower than the development machine (this is what made the Linux
+/// leg fail while macOS passed).
+async fn wait_until<F, Fut>(mut check: F, timeout: std::time::Duration) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if check().await {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// Waits (up to 10 s) for a job to reach any terminal state.
+async fn wait_for_terminal(
+    service: &StartDownloadService,
+    job_id: polysaver_core::domain::DownloadId,
+) {
+    let reached = wait_until(
+        || async {
+            service
+                .list_downloads()
+                .await
+                .iter()
+                .find(|j| j.id() == job_id)
+                .is_some_and(|j| j.is_terminal())
+        },
+        std::time::Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        reached,
+        "job {job_id} did not reach a terminal state in time"
+    );
+}
+
+/// Waits (up to 10 s) for the history repository to contain at least one entry.
+async fn wait_for_history(service: &StartDownloadService) {
+    let recorded = wait_until(
+        || async { service.list_history().await.is_ok_and(|h| !h.is_empty()) },
+        std::time::Duration::from_secs(10),
+    )
+    .await;
+    assert!(recorded, "no history entry was recorded in time");
+}
+
 // 1. OutputFormat all 4 variants accepted
 #[test]
 fn test_all_output_formats_accepted() {
@@ -558,8 +614,8 @@ async fn test_start_download_service_uses_default_preset_and_custom_override() {
         DownloadPreset::mp3(Mp3Quality::K320)
     );
 
-    // Give background task time to complete and record history
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Give the background task time to complete and record history.
+    wait_for_history(&service).await;
     let history = service.list_history().await.unwrap();
     assert!(!history.is_empty());
 
@@ -604,8 +660,8 @@ async fn test_failing_downloader_transitions_to_failed() {
         .await
         .unwrap();
 
-    // Give background task time to run and fail
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Wait for the background task to reach its terminal state.
+    wait_for_terminal(&service, job.id()).await;
 
     let downloads = service.list_downloads().await;
     let found = downloads.iter().find(|j| j.id() == job.id()).unwrap();
@@ -660,7 +716,7 @@ async fn test_retry_download_only_allows_failed_jobs() {
     assert!(matches!(unknown_retry, Err(CoreError::JobNotFound(_))));
 
     // Wait for the download to fail, then retry it faithfully.
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    wait_for_terminal(&service, queued_job.id()).await;
     let failed = service
         .list_downloads()
         .await
@@ -711,7 +767,7 @@ async fn test_failed_jobs_and_retries_do_not_write_history() {
         .start_download("https://www.youtube.com/watch?v=dQw4w9WgXcQ", None, None)
         .await
         .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    wait_for_terminal(&service, job.id()).await;
     let failed = service
         .list_downloads()
         .await
@@ -721,7 +777,7 @@ async fn test_failed_jobs_and_retries_do_not_write_history() {
     assert_eq!(failed.status(), DownloadStatus::Failed);
 
     let retried = service.retry_download(failed.id()).await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    wait_for_terminal(&service, retried.id()).await;
 
     // Failing then retrying (still failing) must not produce any history entry.
     let history = service.list_history().await.unwrap();
@@ -1390,7 +1446,16 @@ async fn test_cancel_and_dismiss_download_state_validation() {
     assert_eq!(second_cancel.status(), DownloadStatus::Canceled);
 
     // 4. Verify sink received exactly 1 canceled event and 0 completed or failed
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let saw_cancellation = wait_until(
+        || async {
+            sink.canceled_count
+                .load(std::sync::atomic::Ordering::SeqCst)
+                == 1
+        },
+        std::time::Duration::from_secs(10),
+    )
+    .await;
+    assert!(saw_cancellation, "the canceled event was never emitted");
     assert_eq!(
         sink.canceled_count
             .load(std::sync::atomic::Ordering::SeqCst),
@@ -1442,8 +1507,8 @@ async fn test_cannot_cancel_completed_job() {
 
     let job_id = job.id();
 
-    // Wait for background worker to complete
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Wait for the background worker to complete.
+    wait_for_terminal(&service, job_id).await;
 
     // Cancellation of completed job is rejected
     let cancel_res = service.cancel_download(job_id).await;
@@ -1564,7 +1629,7 @@ async fn test_transient_failures_are_retried_until_success() {
         .await
         .unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    wait_for_terminal(&service, job.id()).await;
 
     let finished = service
         .list_downloads()
@@ -1634,7 +1699,7 @@ async fn test_non_retryable_failure_is_immediate() {
         .await
         .unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    wait_for_terminal(&service, job.id()).await;
 
     let finished = service
         .list_downloads()
@@ -1683,7 +1748,7 @@ async fn test_exhausted_retries_end_in_failed_with_original_error() {
         .await
         .unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    wait_for_terminal(&service, job.id()).await;
 
     let finished = service
         .list_downloads()
@@ -1789,7 +1854,7 @@ async fn test_stale_engine_updates_once_then_retries() {
         .await
         .unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    wait_for_terminal(&service, job.id()).await;
 
     let finished = service
         .list_downloads()
@@ -1852,7 +1917,7 @@ async fn test_failed_engine_update_keeps_original_error() {
         .await
         .unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    wait_for_terminal(&service, job.id()).await;
 
     let finished = service
         .list_downloads()
