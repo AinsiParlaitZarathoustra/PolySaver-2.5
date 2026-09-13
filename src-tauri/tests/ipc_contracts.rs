@@ -9,6 +9,16 @@ use polysaver_core::domain::{
     DownloadJob, DownloadPreset, MediaUrl, Mp3Quality, OutputFormat, VideoQuality,
 };
 
+/// Builds an absolute path valid on every platform (Windows rejects Unix literals).
+fn abs_path(suffix: &str) -> String {
+    let base = if cfg!(windows) {
+        r"C:\polysaver_test"
+    } else {
+        "/polysaver_test"
+    };
+    format!("{base}/{suffix}")
+}
+
 #[test]
 fn test_download_job_dto_serialization_camel_case() {
     let url = MediaUrl::parse("https://www.youtube.com/watch?v=dQw4w9WgXcQ").unwrap();
@@ -67,7 +77,7 @@ fn test_download_history_entry_dto_serialization_camel_case() {
         url,
         "Never Gonna Give You Up".to_string(),
         preset,
-        "/downloads/video.mp4".to_string(),
+        abs_path("downloads/video.mp4"),
         Some(1770000000000),
     )
     .unwrap();

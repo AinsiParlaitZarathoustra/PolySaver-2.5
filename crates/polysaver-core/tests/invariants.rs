@@ -21,6 +21,35 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Builds an absolute path that is valid on every platform.
+///
+/// `/home/user/x` is absolute on Unix but **not** on Windows, so tests that feed
+/// paths into validated domain objects must not hardcode a Unix literal. The
+/// domain's `is_absolute` check is what makes this matter: a relative-looking
+/// literal turns a passing test into a `ValidationError` on the Windows runner.
+fn abs_path(suffix: &str) -> String {
+    let base = if cfg!(windows) {
+        r"C:\polysaver_test"
+    } else {
+        "/polysaver_test"
+    };
+    format!("{base}/{suffix}")
+}
+
+/// Returns the expected string form of [`abs_path`] (Windows uses a backslash).
+fn abs_path_expected(suffix: &str) -> String {
+    let base = if cfg!(windows) {
+        r"C:\polysaver_test"
+    } else {
+        "/polysaver_test"
+    };
+    if cfg!(windows) {
+        format!(r"{base}\{suffix}")
+    } else {
+        format!("{base}/{suffix}")
+    }
+}
+
 /// Polls `check` until it returns true or `timeout` elapses.
 ///
 /// The download pipeline runs in a background task, so tests must wait for a
@@ -285,17 +314,20 @@ fn test_local_and_reserved_hosts_rejected() {
 #[test]
 fn test_app_settings_path_policies() {
     let video_settings = AppSettings::new(
-        "/home/user/downloads".to_string(),
+        abs_path("home/user/downloads"),
         ThemeMode::Dark,
         DownloadPreset::default(),
         Language::French,
     )
     .unwrap();
-    assert_eq!(video_settings.download_directory(), "/home/user/downloads");
+    assert_eq!(
+        video_settings.download_directory(),
+        abs_path_expected("home/user/downloads")
+    );
     assert_eq!(video_settings.theme_mode(), ThemeMode::Dark);
 
     let audio_settings = AppSettings::new(
-        "/home/user/downloads".to_string(),
+        abs_path("home/user/downloads"),
         ThemeMode::Light,
         DownloadPreset::mp3(Mp3Quality::K256),
         Language::English,
@@ -323,7 +355,7 @@ fn test_app_settings_path_policies() {
     )
     .is_err());
     assert!(AppSettings::new(
-        "/path/with\0null".to_string(),
+        abs_path("path/with\0null"),
         ThemeMode::Dark,
         DownloadPreset::default(),
         Language::French,
@@ -343,13 +375,13 @@ fn test_app_settings_path_policies() {
 fn test_settings_cookies_and_engine_channel() {
     use polysaver_core::domain::{CookiesBrowser, EngineChannel};
 
-    let defaults = AppSettings::defaults_for("/tmp/downloads").unwrap();
+    let defaults = AppSettings::defaults_for(abs_path("downloads")).unwrap();
     assert_eq!(defaults.cookies_from_browser(), None);
     assert_eq!(defaults.engine_channel(), EngineChannel::Stable);
 
     // A configured browser is carried through the DTO round-trip.
     let settings = AppSettings::new(
-        "/tmp/downloads".to_string(),
+        abs_path("downloads"),
         ThemeMode::System,
         DownloadPreset::default(),
         Language::French,
@@ -444,11 +476,14 @@ fn test_download_job_lifecycle() {
     job.transition_to_finalizing().unwrap();
     assert_eq!(job.status(), DownloadStatus::Finalizing);
 
-    job.transition_to_completed("/output/video.mp4".to_string())
+    job.transition_to_completed(abs_path("output/video.mp4"))
         .unwrap();
     assert_eq!(job.status(), DownloadStatus::Completed);
     assert_eq!(job.progress_percent(), None);
-    assert_eq!(job.destination_path(), Some("/output/video.mp4"));
+    assert_eq!(
+        job.destination_path(),
+        Some(abs_path_expected("output/video.mp4").as_str())
+    );
     assert!(job.is_terminal());
 
     // Terminal job cannot be mutated
@@ -798,7 +833,7 @@ async fn test_failed_jobs_and_retries_do_not_write_history() {
 #[test]
 fn test_app_settings_dto_try_from() {
     let dto = AppSettingsDto {
-        download_directory: "/path/to/downloads".to_string(),
+        download_directory: abs_path("path/to/downloads"),
         theme_mode: ThemeMode::System,
         default_preset: DownloadPresetDto {
             format: OutputFormat::Flac,
@@ -812,13 +847,16 @@ fn test_app_settings_dto_try_from() {
     };
 
     let settings = AppSettings::try_from(dto).unwrap();
-    assert_eq!(settings.download_directory(), "/path/to/downloads");
+    assert_eq!(
+        settings.download_directory(),
+        abs_path_expected("path/to/downloads")
+    );
     assert_eq!(settings.theme_mode(), ThemeMode::System);
     assert_eq!(settings.default_preset(), DownloadPreset::Flac);
     assert_eq!(settings.language(), Language::English);
 
     // Default settings must use ThemeMode::System and Language::French
-    let default_settings = AppSettings::defaults_for("/tmp/downloads").unwrap();
+    let default_settings = AppSettings::defaults_for(abs_path("downloads")).unwrap();
     assert_eq!(default_settings.theme_mode(), ThemeMode::System);
     assert_eq!(default_settings.language(), Language::French);
 }
@@ -1111,7 +1149,7 @@ async fn test_get_completed_download_path_validation() {
     #[async_trait::async_trait]
     impl SettingsRepository for DummySettingsRepo {
         async fn load(&self) -> Result<AppSettings, CoreError> {
-            AppSettings::defaults_for("/tmp/downloads")
+            AppSettings::defaults_for(abs_path("downloads"))
         }
         async fn save(&self, _: &AppSettings) -> Result<(), CoreError> {
             Ok(())
@@ -1157,13 +1195,16 @@ async fn test_download_history_entry_invariants_and_actions() {
         url.clone(),
         "  Me at the zoo  ".to_string(),
         preset,
-        "/downloads/zoo.mp4".to_string(),
+        abs_path("downloads/zoo.mp4"),
         Some(123456789),
     )
     .unwrap();
 
     assert_eq!(entry.title(), "Me at the zoo");
-    assert_eq!(entry.destination_path(), "/downloads/zoo.mp4");
+    assert_eq!(
+        entry.destination_path(),
+        abs_path_expected("downloads/zoo.mp4")
+    );
     assert_eq!(entry.completed_at(), 123456789);
     assert_eq!(entry.download_id(), job_id);
 
@@ -1190,7 +1231,7 @@ async fn test_history_file_path_confinement() {
     #[async_trait::async_trait]
     impl SettingsRepository for DummySettingsRepo {
         async fn load(&self) -> Result<AppSettings, CoreError> {
-            AppSettings::defaults_for("/tmp/polysaver_confinement_downloads")
+            AppSettings::defaults_for(abs_path("confinement_downloads"))
         }
         async fn save(&self, _: &AppSettings) -> Result<(), CoreError> {
             Ok(())
@@ -1284,7 +1325,7 @@ fn test_history_entry_rejects_relative_and_traversal_paths() {
         url.clone(),
         "T".to_string(),
         preset,
-        "/downloads/../../etc/passwd".to_string(),
+        abs_path("downloads/../../etc/passwd"),
         None,
     )
     .is_err());
@@ -1294,7 +1335,7 @@ fn test_history_entry_rejects_relative_and_traversal_paths() {
         url,
         "T".to_string(),
         preset,
-        "/downloads/with\0null.mp4".to_string(),
+        abs_path("downloads/with\0null.mp4"),
         None,
     )
     .is_err());

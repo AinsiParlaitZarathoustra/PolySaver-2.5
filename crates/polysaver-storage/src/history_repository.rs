@@ -530,6 +530,17 @@ mod tests {
     use super::*;
     use polysaver_core::domain::format::{OutputFormat, VideoQuality};
 
+    /// Builds an absolute path valid on every platform: a Unix-looking literal is
+    /// not absolute under Windows, and the domain validates destination paths.
+    fn abs_path(suffix: &str) -> String {
+        let base = if cfg!(windows) {
+            r"C:\polysaver_test"
+        } else {
+            "/polysaver_test"
+        };
+        format!("{base}/{suffix}")
+    }
+
     #[tokio::test]
     async fn test_ndjson_history_append_load_remove_compaction() {
         let temp_dir = std::env::temp_dir().join(format!("ndjson_test_{}", Uuid::new_v4()));
@@ -545,7 +556,7 @@ mod tests {
             url.clone(),
             "Video 1".to_string(),
             preset,
-            "/path/to/video1.mp4".to_string(),
+            abs_path("path/to/video1.mp4"),
             Some(1000),
         )
         .unwrap();
@@ -555,7 +566,7 @@ mod tests {
             url.clone(),
             "Video 2".to_string(),
             preset,
-            "/path/to/video2.mp4".to_string(),
+            abs_path("path/to/video2.mp4"),
             Some(2000),
         )
         .unwrap();
@@ -601,7 +612,7 @@ mod tests {
             url,
             "Valid Entry".to_string(),
             preset,
-            "/path/to/valid.mp4".to_string(),
+            abs_path("path/to/valid.mp4"),
             Some(5000),
         )
         .unwrap();
@@ -646,11 +657,12 @@ mod tests {
                         "format": "mp4",
                         "videoQuality": "p1080"
                     },
-                    "destinationPath": "/tmp/legacy.mp4",
+                    "destinationPath": "LEGACY_PATH_PLACEHOLDER",
                     "completedAt": 1700000000
                 }
             ]
         }"#;
+        let legacy_json = legacy_json.replace("LEGACY_PATH_PLACEHOLDER", &abs_path("legacy.mp4"));
         tokio::fs::write(&legacy_file, legacy_json.as_bytes())
             .await
             .unwrap();
