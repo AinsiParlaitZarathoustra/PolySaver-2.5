@@ -6,7 +6,8 @@ use polysaver_core::domain::download_job::DownloadId;
 use polysaver_core::domain::history::{DownloadHistoryEntry, HistoryEntryId};
 use polysaver_core::domain::{
     AppSettings, AppSettingsDto, DownloadJob, DownloadPreset, DownloadPresetDto, DownloadStatus,
-    Language, MediaUrl, Mp3Quality, OutputFormat, ThemeMode, VideoQuality,
+    Language, MediaUrl, MediaUrlKind, Mp3Quality, OutputFormat, ThemeMode, VideoQuality,
+    MAX_PLAYLIST_DOWNLOADS,
 };
 use polysaver_core::error::{CoreError, DownloadErrorDetails};
 use polysaver_core::ports::event_sink::EventSink;
@@ -201,30 +202,76 @@ fn test_video_format_with_audio_quality_rejected_via_dto() {
     assert!(matches!(result, Err(CoreError::InvalidSettings(_))));
 }
 
-// 9. Playlist URLs rejected
+// 9. Playlist URLs are classified, not rejected
 #[test]
-fn test_playlist_urls_rejected() {
-    let list_param = MediaUrl::parse("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL12345");
-    assert!(matches!(
-        list_param,
-        Err(CoreError::PlaylistNotSupported(_))
-    ));
-    assert_eq!(
-        list_param.unwrap_err().machine_code(),
-        "PLAYLIST_NOT_SUPPORTED"
-    );
+fn test_playlist_urls_are_classified_as_playlists() {
+    // A bare `list=` (no explicit video id) is a playlist.
+    let list_only = MediaUrl::parse("https://www.youtube.com/playlist?list=PL12345")
+        .expect("playlist URL must be accepted");
+    assert_eq!(list_only.kind(), MediaUrlKind::Playlist);
 
-    let playlist_path = MediaUrl::parse("https://www.youtube.com/playlist?list=PL12345");
-    assert!(matches!(
-        playlist_path,
-        Err(CoreError::PlaylistNotSupported(_))
-    ));
+    let channel_path = MediaUrl::parse("https://www.youtube.com/channel/UC12345678")
+        .expect("channel URL must be accepted");
+    assert_eq!(channel_path.kind(), MediaUrlKind::Playlist);
 
-    let channel_path = MediaUrl::parse("https://www.youtube.com/channel/UC12345678");
-    assert!(matches!(
-        channel_path,
-        Err(CoreError::PlaylistNotSupported(_))
-    ));
+    // Channels and their sub-pages all resolve to the playlist flow.
+    for raw in [
+        "https://www.youtube.com/@handle",
+        "https://www.youtube.com/@handle/videos",
+        "https://www.youtube.com/@handle/streams",
+        "https://www.youtube.com/c/SomeChannel",
+        "https://www.youtube.com/user/SomeUser",
+        "https://example.com/feed?list=abc",
+    ] {
+        let url = MediaUrl::parse(raw).expect("listing URL must be accepted");
+        assert_eq!(
+            url.kind(),
+            MediaUrlKind::Playlist,
+            "expected playlist for {raw}"
+        );
+    }
+
+    // A watch URL carrying a share `list=` stays a single video, and the parameter is
+    // dropped so the download pipeline cannot accidentally follow the playlist.
+    let shared = MediaUrl::parse("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL12345")
+        .expect("share URL must be accepted");
+    assert_eq!(shared.kind(), MediaUrlKind::Single);
+    assert!(!shared.as_str().contains("list="));
+    assert!(shared.as_str().contains("v=dQw4w9WgXcQ"));
+    assert!(!shared.is_playlist());
+
+    // Other query parameters are preserved by the normalization.
+    let with_extra = MediaUrl::parse("https://www.youtube.com/watch?v=abc&t=42&list=PL9")
+        .expect("share URL with extra params must be accepted");
+    assert_eq!(with_extra.kind(), MediaUrlKind::Single);
+    assert!(with_extra.as_str().contains("t=42"));
+    assert!(!with_extra.as_str().contains("list="));
+
+    // Plain videos are single.
+    let plain = MediaUrl::parse("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        .expect("video URL must be accepted");
+    assert_eq!(plain.kind(), MediaUrlKind::Single);
+}
+
+// 9b. Dangerous URLs stay rejected after the playlist change
+#[test]
+fn test_playlist_support_does_not_weaken_url_validation() {
+    for raw in [
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+        "http://127.0.0.1/playlist?list=PL1",
+        "http://localhost/playlist?list=PL1",
+        "http://10.0.0.5/@handle",
+        "http://[::1]/channel/UC1",
+        "https://user:pass@youtube.com/playlist?list=PL1",
+        "http://169.254.169.254/latest/meta-data",
+        "https://youtube.com.evil.local/playlist?list=PL1",
+    ] {
+        assert!(
+            MediaUrl::parse(raw).is_err(),
+            "dangerous URL must stay rejected: {raw}"
+        );
+    }
 }
 
 // 10. Valid URLs accepted
@@ -1130,10 +1177,11 @@ fn test_media_url_serde_strict_deserialization() {
     // Javascript scheme rejected
     assert!(serde_json::from_str::<MediaUrl>("\"javascript:alert(1)\"").is_err());
 
-    // Playlist URL rejected
-    assert!(
-        serde_json::from_str::<MediaUrl>("\"https://youtube.com/playlist?list=PL123\"").is_err()
-    );
+    // Playlist URL accepted and re-serialized identically
+    let playlist_json = "\"https://youtube.com/playlist?list=PL123\"";
+    let playlist_url = serde_json::from_str::<MediaUrl>(playlist_json).expect("playlist is valid");
+    assert!(playlist_url.is_playlist());
+    assert_eq!(serde_json::to_string(&playlist_url).unwrap(), playlist_json);
 
     // Local/reserved hosts are rejected through deserialization too
     // (history entries pointing there are treated as invalid lines).
@@ -2031,4 +2079,151 @@ async fn test_purge_orphan_temp_dirs_only_removes_old_entries() {
     assert_eq!(removed, 0);
 
     let _ = tokio::fs::remove_dir_all(&temp_root).await;
+}
+
+// 34. Playlist download batches
+/// Downloader that never finishes, so batch tests observe queue state without racing
+/// against the fake pipeline's fast completion.
+struct HangingDownloader;
+
+#[async_trait]
+impl MediaDownloader for HangingDownloader {
+    async fn download_stream(
+        &self,
+        _request: DownloadStreamRequest,
+        _cb: Arc<dyn Fn(StreamProgress) + Send + Sync>,
+    ) -> Result<DownloadedStreams, CoreError> {
+        tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+        Err(CoreError::OperationCancelled)
+    }
+}
+
+async fn batch_test_service(
+    downloader: Arc<dyn MediaDownloader>,
+) -> (StartDownloadService, Arc<InMemoryTestHistoryRepo>, PathBuf) {
+    let dir = std::env::temp_dir().join(format!("polysaver_batch_{}", uuid::Uuid::new_v4()));
+    let download_dir = dir.join("downloads");
+    tokio::fs::create_dir_all(&download_dir).await.unwrap();
+    let settings = AppSettings::new(
+        download_dir.to_string_lossy().to_string(),
+        ThemeMode::Dark,
+        DownloadPreset::video(OutputFormat::Mp4, VideoQuality::P1080).unwrap(),
+        Language::French,
+    )
+    .unwrap();
+    let history = Arc::new(InMemoryTestHistoryRepo::default());
+    let service = StartDownloadService::new(
+        downloader,
+        Arc::new(FakeConverter),
+        Arc::new(FakeInspector),
+        Arc::new(InMemorySettingsRepo {
+            settings: RwLock::new(settings),
+        }),
+        history.clone(),
+        None,
+        dir.join("temp"),
+    );
+    (service, history, dir)
+}
+
+fn playlist_entry_urls(count: usize) -> Vec<MediaUrl> {
+    (0..count)
+        .map(|i| {
+            MediaUrl::parse(&format!("https://www.youtube.com/watch?v=entry{i}"))
+                .expect("generated URL must be valid")
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn test_start_download_batch_rejects_empty_and_oversized_selections() {
+    let (service, _history, _dir) = batch_test_service(Arc::new(HangingDownloader)).await;
+
+    let empty = service
+        .start_download_batch(Vec::new(), None, None)
+        .await
+        .expect_err("an empty selection must be refused");
+    assert!(matches!(empty, CoreError::InvalidSettings(_)));
+
+    let too_many = playlist_entry_urls(MAX_PLAYLIST_DOWNLOADS + 1);
+    let refused = service
+        .start_download_batch(too_many, None, None)
+        .await
+        .expect_err("more than the cap must be refused");
+    assert!(matches!(refused, CoreError::InvalidSettings(_)));
+
+    // Nothing was queued by the two rejected calls.
+    assert!(service.list_downloads().await.is_empty());
+}
+
+#[tokio::test]
+async fn test_start_download_batch_queues_one_independent_job_per_url() {
+    let (service, history, _dir) = batch_test_service(Arc::new(HangingDownloader)).await;
+    let urls = playlist_entry_urls(3);
+    let expected: Vec<String> = urls.iter().map(|u| u.as_str().to_string()).collect();
+
+    let jobs = service
+        .start_download_batch(urls, None, None)
+        .await
+        .expect("batch must be accepted");
+    assert_eq!(jobs.len(), 3);
+
+    // Distinct identifiers: each video is its own job with its own progress,
+    // cancellation, retry and history entry.
+    let mut ids: Vec<String> = jobs.iter().map(|j| j.id().to_string()).collect();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), 3, "each entry must get its own job id");
+
+    let listed = service.list_downloads().await;
+    assert_eq!(listed.len(), 3);
+    let mut listed_urls: Vec<String> = listed
+        .iter()
+        .map(|j| j.url().as_str().to_string())
+        .collect();
+    listed_urls.sort();
+    let mut sorted_expected = expected.clone();
+    sorted_expected.sort();
+    assert_eq!(listed_urls, sorted_expected);
+
+    // The default preset from settings is applied to every job of the batch.
+    for job in &listed {
+        assert_eq!(
+            job.preset(),
+            DownloadPreset::video(OutputFormat::Mp4, VideoQuality::P1080).unwrap()
+        );
+    }
+
+    // No video finished yet: history stays untouched.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(history.load().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_single_download_refuses_playlist_urls() {
+    let (service, _history, _dir) = batch_test_service(Arc::new(FakeDownloader)).await;
+
+    let refused = service
+        .start_download("https://www.youtube.com/playlist?list=PL123", None, None)
+        .await
+        .expect_err("playlist URLs must not go through the single-video pipeline");
+    assert!(matches!(refused, CoreError::InvalidState(_)));
+
+    let channel = service
+        .start_download("https://www.youtube.com/@handle/videos", None, None)
+        .await;
+    assert!(matches!(channel, Err(CoreError::InvalidState(_))));
+
+    assert!(service.list_downloads().await.is_empty());
+
+    // A share URL (v= plus list=) stays a normal single video.
+    let job = service
+        .start_download(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL123",
+            None,
+            None,
+        )
+        .await
+        .expect("share URLs must still download as a single video");
+    assert!(!job.url().as_str().contains("list="));
 }

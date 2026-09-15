@@ -16,6 +16,17 @@ pub struct StartDownloadRequestDto {
     pub output_directory: Option<String>,
 }
 
+/// Request DTO for downloading a selection of playlist entries.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartPlaylistDownloadRequestDto {
+    pub url: String,
+    pub preset: Option<DownloadPresetDto>,
+    pub output_directory: Option<String>,
+    /// URLs of the entries the user checked. Each one is re-validated server-side.
+    pub selected_urls: Vec<String>,
+}
+
 /// Request DTO for analyzing a media URL.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -160,6 +171,31 @@ impl From<&polysaver_core::domain::FormatOption> for FormatOptionDto {
     }
 }
 
+/// One playlist entry in a URL analysis response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistEntryDto {
+    pub index: u32,
+    pub url: String,
+    pub title: String,
+    pub duration_seconds: Option<u64>,
+    pub thumbnail_url: Option<String>,
+    pub available: bool,
+}
+
+impl From<&polysaver_core::domain::PlaylistEntry> for PlaylistEntryDto {
+    fn from(entry: &polysaver_core::domain::PlaylistEntry) -> Self {
+        Self {
+            index: entry.index,
+            url: entry.url.as_str().to_string(),
+            title: entry.title.clone(),
+            duration_seconds: entry.duration_seconds,
+            thumbnail_url: entry.thumbnail_url.clone(),
+            available: entry.available,
+        }
+    }
+}
+
 /// Dedicated explicit IPC response DTO for URL analysis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -171,6 +207,15 @@ pub struct ProbeResultDto {
     pub uploader: Option<String>,
     pub formats: Vec<FormatOptionDto>,
     pub available_video_qualities: Vec<polysaver_core::domain::VideoQuality>,
+    /// `single` or `playlist`.
+    pub kind: polysaver_core::domain::MediaKind,
+    /// Always empty for a single item (retro-compatible shape).
+    pub entries: Vec<PlaylistEntryDto>,
+    /// Total number of videos reported by the provider, when known.
+    pub playlist_total: Option<u64>,
+    /// Maximum number of entries the backend enumerates (`--playlist-end`).
+    /// Let the UI explain that only the first N videos are listed.
+    pub entries_limit: u32,
 }
 
 impl From<&polysaver_core::domain::ProbeResult> for ProbeResultDto {
@@ -183,6 +228,10 @@ impl From<&polysaver_core::domain::ProbeResult> for ProbeResultDto {
             uploader: probe.uploader.clone(),
             formats: probe.formats.iter().map(FormatOptionDto::from).collect(),
             available_video_qualities: probe.available_video_qualities.clone(),
+            kind: probe.kind,
+            entries: probe.entries.iter().map(PlaylistEntryDto::from).collect(),
+            playlist_total: probe.playlist_total,
+            entries_limit: polysaver_core::domain::PLAYLIST_ENTRIES_LIMIT as u32,
         }
     }
 }

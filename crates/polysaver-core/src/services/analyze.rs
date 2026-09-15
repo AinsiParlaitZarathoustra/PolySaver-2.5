@@ -13,6 +13,10 @@ use tokio_util::sync::CancellationToken;
 /// Hard upper bound on a single URL analysis, so a stuck probe can never hang the UI.
 const ANALYZE_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// Playlist enumeration pages through the listing and can legitimately take longer
+/// than a single-video probe.
+const PLAYLIST_ANALYZE_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Sovereign use case service for analyzing media URLs.
 /// Receives raw untrusted string, parses and validates MediaUrl, and calls injected provider.
 pub struct AnalyzeUrlService {
@@ -46,14 +50,21 @@ impl AnalyzeUrlService {
             token
         };
 
+        let timeout = if media_url.is_playlist() {
+            PLAYLIST_ANALYZE_TIMEOUT
+        } else {
+            ANALYZE_TIMEOUT
+        };
+
         let probe = self.provider.probe(&media_url, Some(token.clone()));
-        let result = match tokio::time::timeout(ANALYZE_TIMEOUT, probe).await {
+        let result = match tokio::time::timeout(timeout, probe).await {
             Ok(result) => result,
             Err(_) => {
                 token.cancel();
-                Err(CoreError::ProviderError(
-                    "Analyse expirée: délai de 45 secondes dépassé".to_string(),
-                ))
+                Err(CoreError::ProviderError(format!(
+                    "Analyse expirée: délai de {} secondes dépassé",
+                    timeout.as_secs()
+                )))
             }
         };
 

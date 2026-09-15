@@ -7,9 +7,19 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use url::{Host, Url};
 
+/// Nature of a media URL, determined offline from its path and query only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaUrlKind {
+    /// A single video/audio item.
+    Single,
+    /// A playlist, channel or other multi-video listing.
+    Playlist,
+}
+
 /// Canonical validated media URL value object.
-/// Guarantees that the URL is a valid absolute HTTP or HTTPS URL, rejects playlists/channels,
-/// and refuses local, private, or reserved network targets.
+/// Guarantees that the URL is a valid absolute HTTP or HTTPS URL and refuses local,
+/// private, or reserved network targets.
 ///
 /// Note: deserialization goes through [`MediaUrl::parse`] (`serde(try_from = "String")`), so
 /// history entries pointing at local/reserved hosts are now rejected as invalid lines.
@@ -26,7 +36,6 @@ impl MediaUrl {
     /// - Scheme must be `http` or `https`.
     /// - Host must be present, and must not be local/private/reserved.
     /// - Must not embed credentials (`user:pass@`).
-    /// - Must not be a playlist or channel URL.
     pub fn parse(raw: &str) -> Result<Self, CoreError> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -57,30 +66,40 @@ impl MediaUrl {
 
         validate_host_not_local(&parsed)?;
 
-        // Check for playlist indicators in path or query
-        let path = parsed.path().to_lowercase();
-        if path.starts_with("/playlist") || path.starts_with("/channel") || path.starts_with("/c/")
-        {
-            return Err(CoreError::PlaylistNotSupported(
-                "Playlists and channel URLs are not supported. Please provide an individual video URL."
-                    .to_string(),
-            ));
-        }
+        Ok(Self(normalize_share_playlist_param(parsed)))
+    }
 
-        if let Some(query) = parsed.query() {
-            let lower_query = query.to_lowercase();
-            // Check for list= parameter that indicates a playlist
-            for param in lower_query.split('&') {
-                if param.starts_with("list=") {
-                    return Err(CoreError::PlaylistNotSupported(
-                        "Playlist URLs are not supported in this version. Please provide an individual video URL."
-                            .to_string(),
-                    ));
-                }
+    /// Offline classification of this URL as a single item or a playlist/listing.
+    ///
+    /// The `list=` parameter alone does not make a URL a playlist: it is appended by
+    /// YouTube's "Share" button and rarely means "download the whole playlist", so
+    /// [`Self::parse`] strips it whenever an explicit video id (`v=`) is present.
+    #[must_use]
+    pub fn kind(&self) -> MediaUrlKind {
+        if is_playlist_path(self.0.path()) {
+            return MediaUrlKind::Playlist;
+        }
+        let mut has_list = false;
+        let mut has_video_id = false;
+        for (key, _) in self.0.query_pairs() {
+            let key = key.to_ascii_lowercase();
+            if key == "list" {
+                has_list = true;
+            } else if key == "v" {
+                has_video_id = true;
             }
         }
+        if has_list && !has_video_id {
+            MediaUrlKind::Playlist
+        } else {
+            MediaUrlKind::Single
+        }
+    }
 
-        Ok(Self(parsed))
+    /// Convenience predicate for [`Self::kind`].
+    #[must_use]
+    pub fn is_playlist(&self) -> bool {
+        self.kind() == MediaUrlKind::Playlist
     }
 
     /// Access the underlying URL string.
@@ -122,6 +141,62 @@ impl TryFrom<String> for MediaUrl {
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::parse(&value)
     }
+}
+
+/// Returns true for URL paths that identify a multi-video listing rather than a
+/// single item: YouTube playlists and channel pages (`/channel`, `/c/`, `/user/`,
+/// `/@handle`, including their `/videos`, `/streams` and `/shorts` sub-pages).
+///
+/// `list=` alone is handled separately by [`MediaUrl::kind`]: it only means
+/// "playlist" when no explicit video id is present.
+#[must_use]
+pub fn is_playlist_path(path: &str) -> bool {
+    let path = path.to_ascii_lowercase();
+    path.starts_with("/playlist")
+        || path.starts_with("/channel")
+        || path.starts_with("/c/")
+        || path.starts_with("/user/")
+        || path.starts_with("/@")
+}
+
+/// Strips the `list=` query parameter when an explicit `v=` video id is present.
+///
+/// `list=` is added by YouTube's "Share" button and almost never means "I want the
+/// whole playlist"; treating `watch?v=X&list=Y` as a single video is the least
+/// surprising behaviour. This runs in the single entry point (`parse`), so analysis,
+/// downloads and history all see the same normalized URL, and the `--no-playlist`
+/// flag already passed to yt-dlp then covers the `v=`+`list=` combination.
+fn normalize_share_playlist_param(mut url: Url) -> Url {
+    let mut has_list = false;
+    let mut has_video_id = false;
+    for (key, _) in url.query_pairs() {
+        let key = key.to_ascii_lowercase();
+        if key == "list" {
+            has_list = true;
+        } else if key == "v" {
+            has_video_id = true;
+        }
+    }
+    if !has_list || !has_video_id {
+        return url;
+    }
+
+    let retained: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(key, _)| !key.eq_ignore_ascii_case("list"))
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+
+    if retained.is_empty() {
+        url.set_query(None);
+    } else {
+        let mut serializer = url.query_pairs_mut();
+        serializer.clear();
+        for (key, value) in retained {
+            serializer.append_pair(&key, &value);
+        }
+    }
+    url
 }
 
 /// Rejects local/private/reserved targets, operating on the *parsed* host

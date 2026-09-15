@@ -15,8 +15,11 @@ pub use format::{
     DownloadPreset, DownloadPresetDto, Language, Mp3Quality, OutputFormat, ThemeMode, VideoQuality,
 };
 pub use history::{DownloadHistoryEntry, HistoryEntryId};
-pub use media_url::MediaUrl;
-pub use probe::{FormatOption, ProbeResult};
+pub use media_url::{MediaUrl, MediaUrlKind};
+pub use probe::{
+    FormatOption, MediaKind, PlaylistEntry, ProbeResult, MAX_PLAYLIST_DOWNLOADS,
+    PLAYLIST_ENTRIES_LIMIT,
+};
 pub use settings::{
     AppSettings, AppSettingsDto, CookiesBrowser, EngineChannel, SETTINGS_SCHEMA_VERSION,
 };

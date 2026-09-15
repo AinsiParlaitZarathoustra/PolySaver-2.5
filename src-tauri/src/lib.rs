@@ -148,6 +148,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::set_settings,
             commands::list_downloads,
             commands::start_download,
+            commands::start_playlist_download,
             commands::dismiss_download,
             commands::open_download_source_url,
             commands::reveal_downloaded_file,
@@ -165,6 +166,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::check_js_runtime,
             commands::install_js_runtime,
             commands::open_support_page,
+            commands::open_contact_email,
         ])
         .run(tauri::generate_context!())?;
 

@@ -15,7 +15,8 @@ pub mod updater;
 use async_trait::async_trait;
 use polysaver_binres::BinaryResolver;
 use polysaver_core::domain::{
-    CookiesBrowser, DownloadPreset, FormatOption, MediaUrl, OutputFormat, ProbeResult,
+    CookiesBrowser, DownloadPreset, FormatOption, MediaUrl, OutputFormat, PlaylistEntry,
+    ProbeResult, PLAYLIST_ENTRIES_LIMIT,
 };
 use polysaver_core::error::{CoreError, DownloadErrorCode, DownloadErrorDetails};
 use polysaver_core::ports::media_downloader::{
@@ -94,6 +95,122 @@ pub struct YtDlpAvailability {
     pub version: Option<String>,
     pub binary_path: Option<String>,
     pub status_message: String,
+}
+
+/// Matches the placeholder titles yt-dlp lists for entries that cannot be played.
+fn is_unavailable_title(title: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "[private video]",
+        "[deleted video]",
+        "[unavailable video]",
+        "[members-only video]",
+    ];
+    let lower = title.trim().to_ascii_lowercase();
+    MARKERS.contains(&lower.as_str())
+}
+
+/// Builds a playlist entry from one raw flat-playlist JSON object.
+///
+/// In flat mode `webpage_url` is absent at entry level; `url` already holds a full
+/// watch URL on YouTube. When it does not (other extractors), the `id` is used to
+/// rebuild a canonical YouTube watch URL. Entries with neither are dropped by the
+/// caller. `availability` is always `null` in flat mode, so unplayable entries are
+/// detected from their bracketed placeholder title instead.
+fn playlist_entry_from_json(entry: &serde_json::Value, index: usize) -> Option<PlaylistEntry> {
+    let url = entry["url"]
+        .as_str()
+        .map(String::from)
+        .or_else(|| {
+            entry["id"]
+                .as_str()
+                .map(|id| format!("https://www.youtube.com/watch?v={id}"))
+        })
+        .and_then(|raw| MediaUrl::parse(&raw).ok())?;
+
+    let title = entry["title"].as_str().unwrap_or("").to_string();
+    let thumbnail_url = entry["thumbnails"]
+        .as_array()
+        .and_then(|thumbs| thumbs.first())
+        .and_then(|thumb| thumb["url"].as_str())
+        .map(String::from);
+
+    Some(PlaylistEntry {
+        index: u32::try_from(index).unwrap_or(u32::MAX),
+        url,
+        available: !is_unavailable_title(&title),
+        title,
+        duration_seconds: entry["duration"].as_u64(),
+        thumbnail_url,
+    })
+}
+
+/// Builds the playlist probe result from a flat `--dump-single-json` document.
+///
+/// An empty `entries` array (empty playlist, empty Mix/radio) is a success, not an
+/// error: the UI shows a dedicated "this playlist is empty" message.
+fn playlist_probe_result(url: &MediaUrl, parsed: &serde_json::Value) -> ProbeResult {
+    let title = parsed["title"].as_str().unwrap_or("Playlist").to_string();
+    let uploader = parsed["uploader"]
+        .as_str()
+        .or_else(|| parsed["channel"].as_str())
+        .map(String::from);
+    let thumbnail_url = parsed["thumbnails"]
+        .as_array()
+        .and_then(|thumbs| thumbs.first())
+        .and_then(|thumb| thumb["url"].as_str())
+        .map(String::from)
+        .or_else(|| parsed["thumbnail"].as_str().map(String::from));
+
+    let entries = parsed["entries"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .enumerate()
+                .filter_map(|(position, entry)| playlist_entry_from_json(entry, position + 1))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    ProbeResult::new_playlist(
+        url.clone(),
+        title,
+        thumbnail_url,
+        uploader,
+        entries,
+        parsed["playlist_count"].as_u64(),
+    )
+}
+
+/// Builds the `--dump-single-json` argument list for a probe.
+///
+/// Playlist URLs get `--flat-playlist` (lists entries without extracting each
+/// video: seconds instead of minutes) plus `--playlist-end`. `--lazy-playlist` is
+/// never passed: it would return a partial listing instead of the full, ordered
+/// set of entries the selection UI needs.
+fn build_probe_args(
+    url: &MediaUrl,
+    cookies: Option<CookiesBrowser>,
+    js_runtime: Option<&JsRuntimeSpec>,
+) -> Vec<String> {
+    let mut args = vec![
+        "--dump-single-json".to_string(),
+        "--no-warnings".to_string(),
+    ];
+    if url.is_playlist() {
+        args.push("--flat-playlist".to_string());
+        args.push("--playlist-end".to_string());
+        args.push(PLAYLIST_ENTRIES_LIMIT.to_string());
+        // A long listing pages through the extractor; keep the network bounded.
+        args.push("--socket-timeout".to_string());
+        args.push("30".to_string());
+        args.push("--extractor-retries".to_string());
+        args.push("2".to_string());
+    }
+    push_cookies_from_browser_arg(&mut args, cookies);
+    push_js_runtime_arg(&mut args, js_runtime);
+    args.push(url.as_str().to_string());
+    args
 }
 
 /// Discovers or validates the yt-dlp executable.
@@ -229,13 +346,11 @@ impl MediaProvider for YtDlpDownloader {
         let ffmpeg_bin = self.resolver.resolve_ffmpeg().await.ok().map(|r| r.path);
 
         let temp_dir = std::env::temp_dir();
-        let mut args = vec![
-            "--dump-single-json".to_string(),
-            "--no-warnings".to_string(),
-        ];
-        push_cookies_from_browser_arg(&mut args, self.cookies_from_browser().await);
-        push_js_runtime_arg(&mut args, self.js_runtime().await.as_ref());
-        args.push(url.as_str().to_string());
+        let args = build_probe_args(
+            url,
+            self.cookies_from_browser().await,
+            self.js_runtime().await.as_ref(),
+        );
 
         let run_result = YtDlpProcessRunner::run(
             &binary,
@@ -252,6 +367,22 @@ impl MediaProvider for YtDlpDownloader {
         let parsed: serde_json::Value = serde_json::from_str(&json_str).map_err(|err| {
             CoreError::ProviderError(format!("Failed to parse metadata JSON: {err}"))
         })?;
+
+        // A non-existing/private playlist makes yt-dlp print `null` with a non-zero
+        // exit code, which the runner already surfaced as an error above. An empty
+        // playlist, by contrast, is a valid result: `_type: playlist`, `entries: []`.
+        if parsed.is_null() {
+            return Err(CoreError::DownloadFailed(
+                polysaver_core::error::DownloadErrorDetails::new(
+                    DownloadErrorCode::VideoUnavailable,
+                    "Playlist introuvable, privée ou inaccessible.",
+                    false,
+                ),
+            ));
+        }
+        if url.is_playlist() || parsed["_type"].as_str() == Some("playlist") {
+            return Ok(playlist_probe_result(url, &parsed));
+        }
 
         let title = parsed["title"].as_str().unwrap_or("Sans titre").to_string();
         let duration_seconds = parsed["duration"].as_u64();
@@ -545,6 +676,138 @@ mod tests {
         assert!(META_PRINT_TEMPLATE.contains("f0:%(requested_formats.0.format_id)s"));
         assert!(META_PRINT_TEMPLATE.contains("fallback_id:%(format_id)s"));
         assert!(META_PRINT_TEMPLATE.contains("fallback_size:%(filesize,filesize_approx)s"));
+    }
+
+    #[test]
+    fn test_probe_args_enable_flat_playlist_only_for_listings() {
+        let video = MediaUrl::parse("https://www.youtube.com/watch?v=abc").unwrap();
+        let video_args = build_probe_args(&video, None, None);
+        assert!(!video_args.iter().any(|a| a == "--flat-playlist"));
+        assert!(!video_args.iter().any(|a| a == "--playlist-end"));
+        assert_eq!(video_args.last().map(String::as_str), Some(video.as_str()));
+
+        let playlist = MediaUrl::parse("https://www.youtube.com/playlist?list=PL42").unwrap();
+        let playlist_args = build_probe_args(&playlist, None, None);
+
+        assert!(playlist_args.iter().any(|a| a == "--flat-playlist"));
+        // `--lazy-playlist` would return a partial listing; it must never appear.
+        assert!(!playlist_args.iter().any(|a| a == "--lazy-playlist"));
+
+        let limit_position = playlist_args
+            .iter()
+            .position(|a| a == "--playlist-end")
+            .expect("--playlist-end must be present");
+        assert_eq!(
+            playlist_args[limit_position + 1],
+            PLAYLIST_ENTRIES_LIMIT.to_string()
+        );
+
+        for flag in ["--socket-timeout", "--extractor-retries"] {
+            assert!(playlist_args.iter().any(|a| a == flag), "missing {flag}");
+        }
+
+        // The URL stays last so no user value can be swallowed as a flag argument.
+        assert_eq!(
+            playlist_args.last().map(String::as_str),
+            Some(playlist.as_str())
+        );
+    }
+
+    #[test]
+    fn test_playlist_probe_result_builds_entries_with_positions() {
+        let raw = r#"{
+            "_type": "playlist",
+            "title": "Ma playlist",
+            "uploader": "Une chaîne",
+            "playlist_count": 12000,
+            "thumbnails": [{"url": "https://i.ytimg.com/vi/first/hqdefault.jpg"}],
+            "entries": [
+                {"url": "https://www.youtube.com/watch?v=aaa", "title": "Première", "duration": 61,
+                 "thumbnails": [{"url": "https://i.ytimg.com/vi/aaa/hqdefault.jpg"}]},
+                {"url": "https://www.youtube.com/watch?v=bbb", "title": "[Private video]", "duration": null},
+                {"id": "ccc", "title": "Sans url"}
+            ]
+        }"#;
+        let parsed: serde_json::Value =
+            serde_json::from_str(raw).expect("fixture must be valid JSON");
+        let url = MediaUrl::parse("https://www.youtube.com/playlist?list=PL42").expect("valid URL");
+
+        let result = playlist_probe_result(&url, &parsed);
+
+        assert_eq!(result.kind, polysaver_core::domain::MediaKind::Playlist);
+        assert_eq!(result.title, "Ma playlist");
+        assert_eq!(result.uploader.as_deref(), Some("Une chaîne"));
+        assert_eq!(result.playlist_total, Some(12000));
+        assert_eq!(result.entries.len(), 3);
+
+        assert_eq!(result.entries[0].index, 1);
+        assert_eq!(result.entries[0].title, "Première");
+        assert_eq!(result.entries[0].duration_seconds, Some(61));
+        assert!(result.entries[0].available);
+        assert_eq!(
+            result.entries[0].thumbnail_url.as_deref(),
+            Some("https://i.ytimg.com/vi/aaa/hqdefault.jpg")
+        );
+
+        // Flat mode never fills `availability`: unplayable entries are detected from
+        // their bracketed placeholder title, and the row stays visible but disabled.
+        assert!(!result.entries[1].available);
+        assert_eq!(result.entries[1].title, "[Private video]");
+
+        // No `url`, but an `id`: the watch URL is rebuilt.
+        assert_eq!(result.entries[2].index, 3);
+        assert_eq!(
+            result.entries[2].url.as_str(),
+            "https://www.youtube.com/watch?v=ccc"
+        );
+        assert_eq!(result.available_entries().len(), 2);
+    }
+
+    #[test]
+    fn test_playlist_probe_result_accepts_empty_playlist() {
+        let raw = r#"{"_type": "playlist", "title": "Vide", "entries": []}"#;
+        let parsed: serde_json::Value =
+            serde_json::from_str(raw).expect("fixture must be valid JSON");
+        let url =
+            MediaUrl::parse("https://www.youtube.com/playlist?list=PLempty").expect("valid URL");
+
+        let result = playlist_probe_result(&url, &parsed);
+
+        assert_eq!(result.kind, polysaver_core::domain::MediaKind::Playlist);
+        assert!(result.entries.is_empty());
+        assert_eq!(result.playlist_total, None);
+    }
+
+    #[test]
+    fn test_playlist_entry_drops_unusable_urls() {
+        let raw = r#"{"_type": "playlist", "title": "Mixte", "entries": [
+            {"title": "Ni url ni id"},
+            {"url": "file:///etc/passwd", "title": "Schéma interdit"},
+            {"url": "http://127.0.0.1/watch", "title": "Adresse locale"},
+            {"id": "ok1", "title": "Valide"}
+        ]}"#;
+        let parsed: serde_json::Value =
+            serde_json::from_str(raw).expect("fixture must be valid JSON");
+        let url =
+            MediaUrl::parse("https://www.youtube.com/playlist?list=PLmix").expect("valid URL");
+
+        let result = playlist_probe_result(&url, &parsed);
+
+        // Entries without a usable, validated URL are dropped entirely: the frontend
+        // can never receive an address that `MediaUrl` would reject.
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].title, "Valide");
+    }
+
+    #[test]
+    fn test_unavailable_title_detection_is_exact() {
+        assert!(is_unavailable_title("[Private video]"));
+        assert!(is_unavailable_title("[Deleted video]"));
+        assert!(is_unavailable_title("[Unavailable video]"));
+        assert!(is_unavailable_title("[Members-only video]"));
+        // A real video whose title merely starts with a bracket is not a placeholder.
+        assert!(!is_unavailable_title("[Official] Ma vidéo"));
+        assert!(!is_unavailable_title("Private video"));
     }
 
     #[test]

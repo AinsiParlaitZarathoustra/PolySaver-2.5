@@ -5,6 +5,7 @@ use crate::domain::download_job::{DownloadId, DownloadJob, DownloadStatus};
 use crate::domain::format::DownloadPreset;
 use crate::domain::history::{DownloadHistoryEntry, HistoryEntryId};
 use crate::domain::media_url::MediaUrl;
+use crate::domain::probe::MAX_PLAYLIST_DOWNLOADS;
 use crate::error::{CoreError, DownloadErrorCode, DownloadErrorDetails};
 use crate::ports::converter::{AudioCodec, ConvertRequest, MediaConverter};
 use crate::ports::event_sink::{DownloadProgressEvent, EventSink, ProgressPhase};
@@ -29,6 +30,40 @@ const WINDOWS_RESERVED_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
+
+/// Resolves the destination directory for a job, applying the same validation to
+/// every entry point (single download, batch download, retry).
+fn resolve_target_dir(
+    settings: &crate::domain::AppSettings,
+    custom_output_dir: Option<PathBuf>,
+) -> Result<PathBuf, CoreError> {
+    let default_dir = PathBuf::from(settings.download_directory());
+
+    let Some(custom_dir) = custom_output_dir else {
+        return Ok(default_dir);
+    };
+
+    let path_str = custom_dir.to_string_lossy().trim().to_string();
+    if path_str.is_empty() {
+        return Ok(default_dir);
+    }
+    if path_str.starts_with('~') {
+        return Err(CoreError::InvalidSettings(
+            "Custom download directory cannot start with '~'".to_string(),
+        ));
+    }
+    if path_str.contains('\0') {
+        return Err(CoreError::InvalidSettings(
+            "Custom download directory cannot contain null bytes".to_string(),
+        ));
+    }
+    if !custom_dir.is_absolute() {
+        return Err(CoreError::InvalidSettings(format!(
+            "Custom download directory must be an absolute path: '{path_str}'"
+        )));
+    }
+    Ok(custom_dir)
+}
 
 /// Execution context encapsulating all runtime dependencies for the download pipeline.
 struct PipelineContext {
@@ -173,6 +208,10 @@ impl StartDownloadService {
     }
 
     /// Submits a download request, validates inputs, and launches background processing.
+    ///
+    /// Playlist URLs are refused here: they must go through
+    /// [`Self::start_download_batch`] so that each video becomes its own job with its
+    /// own progress, cancellation, retry and history entry.
     pub async fn start_download(
         &self,
         raw_url: &str,
@@ -180,40 +219,57 @@ impl StartDownloadService {
         custom_output_dir: Option<PathBuf>,
     ) -> Result<DownloadJob, CoreError> {
         let url = MediaUrl::parse(raw_url)?;
+        if url.is_playlist() {
+            return Err(CoreError::InvalidState(
+                "Cette URL est une playlist: utilisez le téléchargement de playlist.".to_string(),
+            ));
+        }
         let settings = self.settings_repo.load().await?;
+        let target_dir = resolve_target_dir(&settings, custom_output_dir)?;
 
-        let preset = requested_preset.unwrap_or_else(|| settings.default_preset());
-
-        let target_dir = if let Some(custom_dir) = custom_output_dir {
-            let path_str = custom_dir.to_string_lossy().trim().to_string();
-            if path_str.is_empty() {
-                PathBuf::from(settings.download_directory())
-            } else {
-                if path_str.starts_with('~') {
-                    return Err(CoreError::InvalidSettings(
-                        "Custom download directory cannot start with '~'".to_string(),
-                    ));
-                }
-                if path_str.contains('\0') {
-                    return Err(CoreError::InvalidSettings(
-                        "Custom download directory cannot contain null bytes".to_string(),
-                    ));
-                }
-                if !custom_dir.is_absolute() {
-                    return Err(CoreError::InvalidSettings(format!(
-                        "Custom download directory must be an absolute path: '{path_str}'"
-                    )));
-                }
-                custom_dir
-            }
-        } else {
-            PathBuf::from(settings.download_directory())
-        };
-
-        let mut job = DownloadJob::new(url, preset);
+        let mut job = DownloadJob::new(
+            url,
+            requested_preset.unwrap_or_else(|| settings.default_preset()),
+        );
         job.set_target_dir(target_dir.clone());
 
         Ok(self.enqueue_and_spawn(job, target_dir).await)
+    }
+
+    /// Queues one job per selected playlist entry.
+    ///
+    /// Every URL is re-parsed and re-validated here, so the frontend can never inject
+    /// an unchecked address. The concurrency limiter then runs them a few at a time
+    /// while each video keeps independent progress, cancellation, retry and history.
+    pub async fn start_download_batch(
+        &self,
+        urls: Vec<MediaUrl>,
+        requested_preset: Option<DownloadPreset>,
+        custom_output_dir: Option<PathBuf>,
+    ) -> Result<Vec<DownloadJob>, CoreError> {
+        if urls.is_empty() {
+            return Err(CoreError::InvalidSettings(
+                "Aucune vidéo sélectionnée.".to_string(),
+            ));
+        }
+        if urls.len() > MAX_PLAYLIST_DOWNLOADS {
+            return Err(CoreError::InvalidSettings(format!(
+                "Trop de vidéos sélectionnées ({}). Maximum: {MAX_PLAYLIST_DOWNLOADS}.",
+                urls.len()
+            )));
+        }
+
+        let settings = self.settings_repo.load().await?;
+        let preset = requested_preset.unwrap_or_else(|| settings.default_preset());
+        let target_dir = resolve_target_dir(&settings, custom_output_dir)?;
+
+        let mut jobs = Vec::with_capacity(urls.len());
+        for url in urls {
+            let mut job = DownloadJob::new(url, preset);
+            job.set_target_dir(target_dir.clone());
+            jobs.push(self.enqueue_and_spawn(job, target_dir.clone()).await);
+        }
+        Ok(jobs)
     }
 
     /// Re-queues a failed job as a brand new queued job preserving URL, preset and target directory.

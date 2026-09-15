@@ -60,6 +60,11 @@ pub fn classify_ytdlp_error(
         || lower.contains("blocked on copyright grounds")
         || lower.contains("premiere will begin")
         || lower.contains("this live stream has ended")
+        || lower.contains("does not exist")
+        || lower.contains("playlist does not exist")
+        || lower.contains("this playlist is private")
+        || lower.contains("unviewable")
+        || lower.contains("inaccessible")
     {
         DownloadErrorCode::VideoUnavailable
     } else if lower.contains("sign in to confirm your age")
