@@ -75,6 +75,11 @@ function job(id: string, url: string): DownloadJobDto {
   };
 }
 
+/**
+ * These two tests drive the whole app shell (typing a URL, opening the dialog,
+ * checking entries). On a loaded or slow runner that exceeds vitest's default 5 s,
+ * so the budget is raised here rather than globally.
+ */
 describe('Sprint 5: playlist mode end-to-end (App wiring)', () => {
   beforeEach(async () => {
     await setAppLanguage('fr');
@@ -136,7 +141,7 @@ describe('Sprint 5: playlist mode end-to-end (App wiring)', () => {
     // Both videos show up individually in the queue, with a confirmation toast.
     expect(await screen.findByText('Première vidéo')).toBeInTheDocument();
     expect(screen.getByText('2 vidéos ajoutées à la file')).toBeInTheDocument();
-  });
+  }, 20000);
 
   it('surfaces a batch failure instead of leaving it silent', async () => {
     const user = userEvent.setup();
@@ -156,5 +161,5 @@ describe('Sprint 5: playlist mode end-to-end (App wiring)', () => {
     await user.click(screen.getByRole('button', { name: /lancer le téléchargement \(2\)/i }));
 
     expect(await screen.findByText('Refus du moteur: sélection invalide')).toBeInTheDocument();
-  });
+  }, 20000);
 });

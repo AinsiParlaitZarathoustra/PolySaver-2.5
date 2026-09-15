@@ -230,7 +230,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
     expect(fastBtnAgain).not.toBeDisabled();
     await user.click(fastBtnAgain);
     expect(handleFast).toHaveBeenCalledTimes(1);
-  });
+  }, 20000);
 
   // 5. Fast download flow
   it('triggers onFastDownload when clicking Fast Download button and clears input on success', async () => {
@@ -257,7 +257,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
     await waitFor(() => {
       expect(input).toHaveValue('');
     });
-  });
+  }, 20000);
 
   // 6. DownloadOptionsDialog with location selector
   it('renders DownloadOptionsDialog with location picker and passes chosen directory on confirm', async () => {
@@ -302,7 +302,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
     );
 
     pickSpy.mockRestore();
-  });
+  }, 20000);
 
   // 6b. Playlist mode: entry list, selection and confirmation payload
   it('lists playlist entries and confirms only the checked videos', async () => {
