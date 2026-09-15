@@ -62,4 +62,9 @@ jobs:
       - name: Run real network E2E suite
         env:
           POLYSAVER_RUN_NETWORK_E2E: '1'
-        run: cargo test --test e2e_real_downloads -- --ignored --nocapture
+        # Runs the full download matrix, then the native playlist detection
+        # (which downloads nothing: it only asks the engine for the listing
+        # envelope). Each file is a separate binary, hence two commands.
+        run: |
+          cargo test --test e2e_real_downloads -- --ignored --nocapture
+          cargo test --test e2e_playlist_detection -- --ignored --nocapture
