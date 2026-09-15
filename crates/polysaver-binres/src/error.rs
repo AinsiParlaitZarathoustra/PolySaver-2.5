@@ -61,4 +61,11 @@ pub enum BinResError {
 
     #[error("Failed to execute probe for binary '{kind}': {error}")]
     ProbeFailed { kind: BinaryKind, error: String },
+
+    /// The candidate could not be started at all. Distinct from [`Self::ProbeFailed`]
+    /// because a spawn failure can be caused by momentary OS exhaustion
+    /// (`fork: Resource temporarily unavailable`) rather than by the binary itself,
+    /// and is therefore worth a bounded retry.
+    #[error("Failed to spawn binary '{kind}': {error}")]
+    SpawnFailed { kind: BinaryKind, error: String },
 }

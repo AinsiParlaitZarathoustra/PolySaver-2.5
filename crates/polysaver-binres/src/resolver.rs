@@ -336,7 +336,7 @@ async fn verify_binary_file(kind: BinaryKind, path: &Path) -> Result<ResolvedBin
     }
 
     let meta = std::fs::metadata(path).map_err(|_| BinResError::NotFound { kind })?;
-    let version = query_binary_version(kind, path).await?;
+    let version = query_version_with_retry(kind, path).await?;
     let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
 
     Ok(ResolvedBinary {
@@ -348,6 +348,29 @@ async fn verify_binary_file(kind: BinaryKind, path: &Path) -> Result<ResolvedBin
     })
 }
 
+/// Number of attempts when starting a candidate binary fails at the OS level.
+const SPAWN_ATTEMPTS: u32 = 4;
+
+/// Queries a candidate version, retrying a failed spawn a bounded number of times.
+///
+/// Spawning can fail momentarily on a loaded machine (`fork: Resource temporarily
+/// unavailable`, `Text file busy`). Without the retry such a candidate is treated
+/// as absent, and the search silently continues to an unrelated install — an
+/// app-managed Node.js could then lose to a system one.
+async fn query_version_with_retry(kind: BinaryKind, path: &Path) -> Result<String, BinResError> {
+    let mut attempt = 1;
+    loop {
+        match query_binary_version(kind, path).await {
+            Ok(version) => return Ok(version),
+            Err(BinResError::SpawnFailed { .. }) if attempt < SPAWN_ATTEMPTS => {
+                tokio::time::sleep(std::time::Duration::from_millis(20 * u64::from(attempt))).await;
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
 /// Queries version flag on a binary and extracts the first non-empty line.
 pub async fn query_binary_version(
     kind: BinaryKind,
@@ -357,7 +380,7 @@ pub async fn query_binary_version(
     let mut cmd = Command::new(bin_path);
     cmd.arg(flag);
 
-    let output = cmd.output().await.map_err(|err| BinResError::ProbeFailed {
+    let output = cmd.output().await.map_err(|err| BinResError::SpawnFailed {
         kind,
         error: format!("Failed to spawn {}: {err}", bin_path.display()),
     })?;
@@ -464,6 +487,39 @@ mod tests {
         let res = resolver.resolve(BinaryKind::YtDlp).await;
         // On machine where yt-dlp is in PATH, it might resolve or not, but for an unknown binary it returns NotFound
         assert!(matches!(res, Ok(_) | Err(BinResError::NotFound { .. })));
+    }
+
+    /// A spawn failure is reported as `SpawnFailed` (not as "candidate absent"),
+    /// and the retry stays bounded: an unexecutable file fails fast instead of
+    /// looping for seconds.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_spawn_failure_is_classified_and_retry_is_bounded() {
+        let dir = std::env::temp_dir().join(format!("binres_spawn_{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join("node");
+        // Exists as a regular file, but without the execute bit: the exec itself
+        // fails, which is a spawn error rather than a version-query error.
+        tokio::fs::write(&path, b"#!/bin/sh\necho v24.0.0\n")
+            .await
+            .unwrap();
+
+        let start = std::time::Instant::now();
+        let err = query_version_with_retry(BinaryKind::Node, &path)
+            .await
+            .expect_err("an unexecutable candidate must not report a version");
+        assert!(
+            matches!(err, BinResError::SpawnFailed { .. }),
+            "expected SpawnFailed, got {err:?}"
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "the retry loop must stay bounded"
+        );
+        // Not retried into a different error kind either.
+        assert!(!matches!(err, BinResError::NotFound { .. }));
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
     // These three tests fabricate fake binaries as POSIX shell scripts and rely
