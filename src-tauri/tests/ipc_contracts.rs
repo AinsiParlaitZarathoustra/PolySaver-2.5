@@ -238,10 +238,7 @@ fn test_start_playlist_download_request_deserialization() {
     }"#;
 
     let parsed: StartPlaylistDownloadRequestDto = serde_json::from_str(raw_json).unwrap();
-    assert_eq!(
-        parsed.url,
-        "https://www.youtube.com/playlist?list=PL123"
-    );
+    assert_eq!(parsed.url, "https://www.youtube.com/playlist?list=PL123");
     assert_eq!(parsed.selected_urls.len(), 2);
     assert!(parsed.output_directory.is_none());
 
