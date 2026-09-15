@@ -122,6 +122,16 @@ export interface FormatOption {
 /** Kind of media resolved by an analysis. Mirrors the Rust `MediaKind`. */
 export type MediaKind = 'single' | 'playlist';
 
+/**
+ * Native answer to "is this URL a playlist?".
+ *
+ * Produced by the download engine itself (yt-dlp reads the real listing), so it is
+ * authoritative, unlike the URL-shape guess in `isPlaylistLikeUrl`.
+ */
+export interface PlaylistDetectionDto {
+  isPlaylist: boolean;
+}
+
 /** One entry of a playlist, as returned by a flat (non-extracted) enumeration. */
 export interface PlaylistEntry {
   index: number;

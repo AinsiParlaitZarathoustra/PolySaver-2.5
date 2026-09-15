@@ -16,6 +16,7 @@ import type {
   EngineUpdateStatusDto,
   HealthStatus,
   JsRuntimeStatusDto,
+  PlaylistDetectionDto,
   ProbeResult,
   UpdateInfo,
   UpdateProgressCallback,
@@ -77,6 +78,14 @@ export interface IpcClient {
   healthCheck(): Promise<HealthStatus>;
   analyzeUrl(url: string): Promise<ProbeResult>;
   cancelAnalyze(): Promise<void>;
+  /**
+   * Asks the download engine whether an URL is a playlist.
+   *
+   * This is the native answer (yt-dlp reads the real listing), not a guess based
+   * on the URL shape, and it downloads nothing.
+   */
+  detectPlaylist(url: string): Promise<PlaylistDetectionDto>;
+  cancelPlaylistDetection(): Promise<void>;
   getSettings(): Promise<AppSettingsDto>;
   setSettings(settings: AppSettingsDto): Promise<AppSettingsDto>;
   startDownload(
@@ -141,6 +150,24 @@ export class TauriIpcClient implements IpcClient {
   async cancelAnalyze(): Promise<void> {
     try {
       await invoke('cancel_analyze');
+    } catch (err) {
+      throw normalizeIpcError(err);
+    }
+  }
+
+  async detectPlaylist(url: string): Promise<PlaylistDetectionDto> {
+    try {
+      return await invoke<PlaylistDetectionDto>('detect_playlist', {
+        request: { url },
+      });
+    } catch (err) {
+      throw normalizeIpcError(err);
+    }
+  }
+
+  async cancelPlaylistDetection(): Promise<void> {
+    try {
+      await invoke('cancel_playlist_detection');
     } catch (err) {
       throw normalizeIpcError(err);
     }

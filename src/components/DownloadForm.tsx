@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 PolySaver contributors
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card,
   CardContent,
@@ -19,6 +19,7 @@ import BoltIcon from '@mui/icons-material/Bolt';
 import DownloadIcon from '@mui/icons-material/Download';
 import LinkIcon from '@mui/icons-material/Link';
 import { useTranslation } from 'react-i18next';
+import { defaultIpcClient } from '../ipc/client';
 
 interface DownloadFormProps {
   onFastDownload: (url: string) => Promise<boolean>;
@@ -26,19 +27,22 @@ interface DownloadFormProps {
   isProcessing?: boolean;
 }
 
+/** Delay before asking the engine, so typing does not trigger a request per key. */
+const DETECT_DEBOUNCE_MS = 500;
+
 /**
- * Client-side mirror of the Rust `MediaUrlKind` classification
- * (`crates/polysaver-core/src/domain/media_url.rs`).
+ * Fast URL-shape guess, used only as instant feedback while the engine answer is
+ * pending (and as a fallback if the engine cannot be reached).
  *
- * The frontend cannot call the domain directly, so the rule is duplicated here to
- * disable the green button before any round trip. It is only a UX hint: the backend
- * re-parses and re-validates every URL, and remains the single source of truth.
+ * The authoritative answer comes from the engine through `detectPlaylist`: only
+ * yt-dlp knows what an URL really resolves to.
  *
- * A playlist is a listing path (`/playlist`, `/channel`, `/c/`, `/user/`, `/@`) or a
- * bare `list=` parameter. `watch?v=X&list=Y` is a single video: the backend strips
- * the share parameter.
+ * A listing is a `/playlist`, `/channel`, `/c/`, `/user/` or `/@handle` path, or a
+ * bare `list=` parameter — which is a YouTube convention (elsewhere `list` is an
+ * ordinary query parameter such as pagination). `watch?v=X&list=Y` is a single
+ * video, because the backend strips the share parameter.
  */
-export const isPlaylistUrl = (raw: string): boolean => {
+export const isPlaylistLikeUrl = (raw: string): boolean => {
   const trimmed = raw.trim();
   let parsed: URL;
   try {
@@ -58,6 +62,17 @@ export const isPlaylistUrl = (raw: string): boolean => {
     return true;
   }
 
+  const host = parsed.hostname.toLowerCase();
+  const isYouTube =
+    host === 'youtube.com' ||
+    host.endsWith('.youtube.com') ||
+    host === 'youtu.be' ||
+    host === 'youtube-nocookie.com' ||
+    host.endsWith('.youtube-nocookie.com');
+  if (!isYouTube) {
+    return false;
+  }
+
   const hasList = parsed.searchParams.has('list');
   const hasVideoId = parsed.searchParams.has('v');
   return hasList && !hasVideoId;
@@ -72,8 +87,52 @@ export const DownloadForm: React.FC<DownloadFormProps> = ({
   const [url, setUrl] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isFastDownloading, setIsFastDownloading] = useState(false);
+  // Instant shape guess; replaced by the engine answer as soon as it lands.
+  const [isPlaylistUrl, setIsPlaylistUrl] = useState(false);
+  // Generation counter: only the newest detection may write state.
+  const detectGenerationRef = useRef(0);
 
-  const playlistMode = isPlaylistUrl(url);
+  useEffect(() => {
+    const trimmed = url.trim();
+    if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+      setIsPlaylistUrl(false);
+      return undefined;
+    }
+
+    detectGenerationRef.current += 1;
+    const generation = detectGenerationRef.current;
+
+    // Instant feedback from the URL shape while the engine is asked.
+    setIsPlaylistUrl(isPlaylistLikeUrl(trimmed));
+    // Only cancel on cleanup when a request was actually sent: before the
+    // debounce fires there is nothing running to stop.
+    let requestSent = false;
+
+    const timer = setTimeout(() => {
+      requestSent = true;
+      void (async () => {
+        try {
+          const detection = await defaultIpcClient.detectPlaylist(trimmed);
+          if (detectGenerationRef.current !== generation) return;
+          setIsPlaylistUrl(detection.isPlaylist);
+        } catch {
+          // Engine unreachable or URL not resolvable: keep the shape-based guess
+          // rather than showing a stale answer for another URL.
+        }
+      })();
+    }, DETECT_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timer);
+      if (requestSent) {
+        void defaultIpcClient.cancelPlaylistDetection().catch(() => {
+          // Nothing left to cancel, or the bridge is unavailable (tests).
+        });
+      }
+    };
+  }, [url]);
+
+  const playlistMode = isPlaylistUrl;
 
   const validateUrl = (raw: string): string | null => {
     const trimmed = raw.trim();

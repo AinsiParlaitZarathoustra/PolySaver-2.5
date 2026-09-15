@@ -37,6 +37,8 @@ describe('Sprint 8.4: Help, Support and Updater', () => {
     listDownloads: vi.fn(),
     cancelDownload: vi.fn(),
     cancelAnalyze: vi.fn(),
+    detectPlaylist: vi.fn().mockResolvedValue({ isPlaylist: false }),
+    cancelPlaylistDetection: vi.fn().mockResolvedValue(undefined),
     retryDownload: vi.fn(),
     dismissDownload: vi.fn(),
     openDownloadSourceUrl: vi.fn(),

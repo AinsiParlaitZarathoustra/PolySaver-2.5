@@ -232,6 +232,57 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
     expect(handleFast).toHaveBeenCalledTimes(1);
   }, 20000);
 
+  // 4b. The engine answer is authoritative, the URL shape only a fast guess
+  it('uses the engine answer to decide playlist mode, in both directions', async () => {
+    const user = userEvent.setup();
+    const detectPlaylist = vi
+      .spyOn(defaultIpcClient, 'detectPlaylist')
+      // The URL looks like a video, but the engine knows it resolves to a listing.
+      .mockResolvedValueOnce({ isPlaylist: true })
+      // The URL looks like a playlist, but the engine reports a single video.
+      .mockResolvedValueOnce({ isPlaylist: false });
+    const cancelPlaylistDetection = vi.spyOn(defaultIpcClient, 'cancelPlaylistDetection');
+    const theme = createAppTheme('dark');
+
+    render(
+      <ThemeProvider theme={theme}>
+        <DownloadForm onFastDownload={vi.fn().mockResolvedValue(true)} onGuidedDownload={vi.fn()} />
+      </ThemeProvider>,
+    );
+
+    const input = screen.getByPlaceholderText(/collez un lien ici/i);
+
+    // No badge while the engine has not answered for a plain-looking video URL.
+    await user.type(input, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    expect(screen.queryByText('Mode playlist')).not.toBeInTheDocument();
+
+    // The engine answer turns playlist mode on.
+    await waitFor(
+      () => {
+        expect(screen.getByText('Mode playlist')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+    expect(detectPlaylist).toHaveBeenCalledWith('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+
+    // A shape-based guess is shown immediately, then corrected by the engine.
+    await user.clear(input);
+    await user.type(input, 'https://www.youtube.com/playlist?list=PL42');
+    await waitFor(
+      () => {
+        expect(screen.queryByText('Mode playlist')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /téléchargement rapide/i })).not.toBeDisabled();
+      },
+      { timeout: 5000 },
+    );
+
+    // Editing the field cancels whatever detection was still running.
+    expect(cancelPlaylistDetection).toHaveBeenCalled();
+
+    detectPlaylist.mockRestore();
+    cancelPlaylistDetection.mockRestore();
+  }, 20000);
+
   // 5. Fast download flow
   it('triggers onFastDownload when clicking Fast Download button and clears input on success', async () => {
     const user = userEvent.setup();
@@ -560,6 +611,8 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       listDownloads: vi.fn(),
       cancelDownload: vi.fn(),
       cancelAnalyze: vi.fn(),
+      detectPlaylist: vi.fn().mockResolvedValue({ isPlaylist: false }),
+      cancelPlaylistDetection: vi.fn().mockResolvedValue(undefined),
       retryDownload: vi.fn(),
       dismissDownload: vi.fn(),
       openDownloadSourceUrl: vi.fn(),
@@ -662,6 +715,8 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       listDownloads: vi.fn(),
       cancelDownload: vi.fn(),
       cancelAnalyze: vi.fn(),
+      detectPlaylist: vi.fn().mockResolvedValue({ isPlaylist: false }),
+      cancelPlaylistDetection: vi.fn().mockResolvedValue(undefined),
       retryDownload: vi.fn(),
       dismissDownload: vi.fn(),
       openDownloadSourceUrl: vi.fn(),
@@ -761,6 +816,8 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       listDownloads: vi.fn(),
       cancelDownload: vi.fn().mockResolvedValue(canceledJob),
       cancelAnalyze: vi.fn(),
+      detectPlaylist: vi.fn().mockResolvedValue({ isPlaylist: false }),
+      cancelPlaylistDetection: vi.fn().mockResolvedValue(undefined),
       retryDownload: vi.fn(),
       dismissDownload: vi.fn(),
       openDownloadSourceUrl: vi.fn(),
