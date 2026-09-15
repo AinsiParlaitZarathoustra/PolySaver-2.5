@@ -8,6 +8,7 @@ import {
   TextField,
   Button,
   Box,
+  Chip,
   CircularProgress,
   Alert,
   Stack,
@@ -25,6 +26,43 @@ interface DownloadFormProps {
   isProcessing?: boolean;
 }
 
+/**
+ * Client-side mirror of the Rust `MediaUrlKind` classification
+ * (`crates/polysaver-core/src/domain/media_url.rs`).
+ *
+ * The frontend cannot call the domain directly, so the rule is duplicated here to
+ * disable the green button before any round trip. It is only a UX hint: the backend
+ * re-parses and re-validates every URL, and remains the single source of truth.
+ *
+ * A playlist is a listing path (`/playlist`, `/channel`, `/c/`, `/user/`, `/@`) or a
+ * bare `list=` parameter. `watch?v=X&list=Y` is a single video: the backend strips
+ * the share parameter.
+ */
+export const isPlaylistUrl = (raw: string): boolean => {
+  const trimmed = raw.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return false;
+  }
+
+  const path = parsed.pathname.toLowerCase();
+  if (
+    path.startsWith('/playlist') ||
+    path.startsWith('/channel') ||
+    path.startsWith('/c/') ||
+    path.startsWith('/user/') ||
+    path.startsWith('/@')
+  ) {
+    return true;
+  }
+
+  const hasList = parsed.searchParams.has('list');
+  const hasVideoId = parsed.searchParams.has('v');
+  return hasList && !hasVideoId;
+};
+
 export const DownloadForm: React.FC<DownloadFormProps> = ({
   onFastDownload,
   onGuidedDownload,
@@ -34,6 +72,8 @@ export const DownloadForm: React.FC<DownloadFormProps> = ({
   const [url, setUrl] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isFastDownloading, setIsFastDownloading] = useState(false);
+
+  const playlistMode = isPlaylistUrl(url);
 
   const validateUrl = (raw: string): string | null => {
     const trimmed = raw.trim();
@@ -132,18 +172,33 @@ export const DownloadForm: React.FC<DownloadFormProps> = ({
               display: 'flex',
               flexDirection: { xs: 'column', sm: 'row' },
               gap: 2,
+              alignItems: { xs: 'stretch', sm: 'center' },
               justifyContent: 'flex-end',
             }}
           >
+            {playlistMode && (
+              <Chip
+                label={t('form.playlistModeBadge')}
+                size="small"
+                color="primary"
+                variant="outlined"
+                sx={{ alignSelf: { xs: 'flex-start', sm: 'center' } }}
+              />
+            )}
+
             {/* Fast Download (Green with Bolt) */}
-            <Tooltip title={t('form.quickDownloadTooltip')}>
+            <Tooltip
+              title={
+                playlistMode ? t('form.playlistFastUnavailable') : t('form.quickDownloadTooltip')
+              }
+            >
               <span>
                 <Button
                   variant="contained"
                   color="success"
                   size="large"
                   onClick={handleFastDownload}
-                  disabled={isDisabled || !url.trim()}
+                  disabled={isDisabled || !url.trim() || playlistMode}
                   startIcon={
                     isFastDownloading ? (
                       <CircularProgress size={20} color="inherit" />

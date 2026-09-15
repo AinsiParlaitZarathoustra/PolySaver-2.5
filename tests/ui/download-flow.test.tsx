@@ -61,6 +61,41 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
     availableVideoQualities: ['best', 'p1080', 'p720'],
   };
 
+  /** Playlist probe fixture: two playable entries and one unavailable placeholder. */
+  const samplePlaylistProbe: ProbeResult = {
+    url: 'https://www.youtube.com/playlist?list=PL12345678',
+    title: 'Ma playlist',
+    thumbnailUrl: 'https://i.ytimg.com/vi/first111/hqdefault.jpg',
+    uploader: 'Une chaîne',
+    formats: [],
+    availableVideoQualities: [],
+    kind: 'playlist',
+    entries: [
+      {
+        index: 1,
+        url: 'https://www.youtube.com/watch?v=first111',
+        title: 'Première vidéo',
+        durationSeconds: 61,
+        available: true,
+      },
+      {
+        index: 2,
+        url: 'https://www.youtube.com/watch?v=second222',
+        title: 'Deuxième vidéo',
+        durationSeconds: 125,
+        available: true,
+      },
+      {
+        index: 3,
+        url: 'https://www.youtube.com/watch?v=third333',
+        title: '[Private video]',
+        available: false,
+      },
+    ],
+    playlistTotal: 3,
+    entriesLimit: 200,
+  };
+
   // 1. formatTransferRate utility (FR and EN)
   it('formats transfer rates correctly in Mo/s (FR) and MB/s (EN)', () => {
     expect(formatTransferRate(2500000, 'fr')).toMatch(/2[,.]50 Mo\/s/);
@@ -120,7 +155,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       </ThemeProvider>,
     );
 
-    expect(screen.getByPlaceholderText(/collez un lien youtube/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/collez un lien ici/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /téléchargement rapide/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^télécharger$/i })).toBeInTheDocument();
 
@@ -137,15 +172,15 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       </ThemeProvider>,
     );
 
-    expect(screen.getByPlaceholderText(/paste a youtube/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/paste a link here/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /quick download/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^download$/i })).toBeInTheDocument();
   });
 
-  // 4. Invalid scheme client-side rejection & backend playlist error handling
-  it('rejects invalid URLs client-side and surfaces backend error on playlist URLs', async () => {
+  // 4. Invalid scheme client-side rejection & playlist detection
+  it('rejects invalid URLs client-side and enables playlist mode for listings', async () => {
     const user = userEvent.setup();
-    const handleFast = vi.fn().mockRejectedValue(new Error('Les playlists et les chaînes ne sont pas prises en charge'));
+    const handleFast = vi.fn().mockResolvedValue(true);
     const handleGuided = vi.fn();
     const theme = createAppTheme('dark');
 
@@ -159,7 +194,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       </ThemeProvider>,
     );
 
-    const input = screen.getByPlaceholderText(/collez un lien youtube/i);
+    const input = screen.getByPlaceholderText(/collez un lien ici/i);
     await user.type(input, 'ftp://invalid-url.com');
 
     const fastBtn = screen.getByRole('button', { name: /téléchargement rapide/i });
@@ -170,14 +205,31 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       screen.getByText(/veuillez saisir une url valide/i),
     ).toBeInTheDocument();
 
+    // A playlist URL turns on playlist mode: badge shown, green button disabled,
+    // blue button still available.
+    await user.clear(input);
+    await user.type(input, 'https://www.youtube.com/playlist?list=PL12345678');
+
+    expect(screen.getByText('Mode playlist')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /téléchargement rapide/i })).toBeDisabled();
+
+    const guidedBtn = screen.getByRole('button', { name: /^télécharger$/i });
+    expect(guidedBtn).not.toBeDisabled();
+    await user.click(guidedBtn);
+    expect(handleGuided).toHaveBeenCalledWith(
+      'https://www.youtube.com/playlist?list=PL12345678',
+    );
+    expect(handleFast).not.toHaveBeenCalled();
+
+    // A share URL (`v=` plus `list=`) is a single video: no playlist mode.
     await user.clear(input);
     await user.type(input, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL12345678');
-    await user.click(fastBtn);
 
-    expect(handleFast).toHaveBeenCalled();
-    expect(
-      await screen.findByText(/les playlists et les chaînes ne sont pas prises en charge/i),
-    ).toBeInTheDocument();
+    expect(screen.queryByText('Mode playlist')).not.toBeInTheDocument();
+    const fastBtnAgain = screen.getByRole('button', { name: /téléchargement rapide/i });
+    expect(fastBtnAgain).not.toBeDisabled();
+    await user.click(fastBtnAgain);
+    expect(handleFast).toHaveBeenCalledTimes(1);
   });
 
   // 5. Fast download flow
@@ -195,7 +247,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       </ThemeProvider>,
     );
 
-    const input = screen.getByPlaceholderText(/collez un lien youtube/i);
+    const input = screen.getByPlaceholderText(/collez un lien ici/i);
     await user.type(input, 'https://www.youtube.com/watch?v=jNQXAC9IVRw');
 
     const fastBtn = screen.getByRole('button', { name: /téléchargement rapide/i });
@@ -246,9 +298,110 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
     expect(handleConfirm).toHaveBeenCalledWith(
       { format: 'mp4', videoQuality: 'p1080' },
       '/custom/my_movies',
+      undefined,
     );
 
     pickSpy.mockRestore();
+  });
+
+  // 6b. Playlist mode: entry list, selection and confirmation payload
+  it('lists playlist entries and confirms only the checked videos', async () => {
+    const user = userEvent.setup();
+    const handleConfirm = vi.fn().mockResolvedValue(undefined);
+    const theme = createAppTheme('dark');
+
+    render(
+      <ThemeProvider theme={theme}>
+        <DownloadOptionsDialog
+          open={true}
+          onClose={vi.fn()}
+          probeResult={samplePlaylistProbe}
+          isLoading={false}
+          defaultPreset={defaultPreset}
+          defaultDownloadDirectory="~/Downloads/PolySaver"
+          onConfirmDownload={handleConfirm}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByText('Vidéos de la playlist')).toBeInTheDocument();
+    expect(screen.getByText('Première vidéo')).toBeInTheDocument();
+    expect(screen.getByText('Deuxième vidéo')).toBeInTheDocument();
+    // Unplayable entries stay visible but disabled under a neutral label.
+    expect(screen.getByText('Vidéo indisponible')).toBeInTheDocument();
+
+    // Nothing checked yet: the confirmation explains what to do and stays disabled.
+    expect(screen.getByText('Sélectionnez au moins une vidéo')).toBeInTheDocument();
+    const confirmBtn = screen.getByRole('button', { name: /lancer le téléchargement \(0\)/i });
+    expect(confirmBtn).toBeDisabled();
+
+    // "Select all" skips unavailable entries.
+    await user.click(screen.getByRole('button', { name: /tout sélectionner/i }));
+    expect(screen.getByText('2 sur 3 sélectionnées')).toBeInTheDocument();
+
+    // Unchecking one removes it from the payload.
+    const firstCheckbox = screen.getAllByRole('checkbox')[0];
+    await user.click(firstCheckbox);
+    expect(screen.getByText('1 sur 3 sélectionnées')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /lancer le téléchargement \(1\)/i }));
+    expect(handleConfirm).toHaveBeenCalledWith(
+      { format: 'mp4', videoQuality: 'p1080' },
+      '~/Downloads/PolySaver',
+      ['https://www.youtube.com/watch?v=second222'],
+    );
+
+    // "Deselect all" empties the selection again.
+    await user.click(screen.getByRole('button', { name: /tout désélectionner/i }));
+    expect(screen.getByText('0 sur 3 sélectionnées')).toBeInTheDocument();
+  });
+
+  // 6c. Empty playlist: dedicated message, no checkbox, confirmation disabled
+  it('shows a dedicated message for an empty playlist', () => {
+    const theme = createAppTheme('dark');
+
+    render(
+      <ThemeProvider theme={theme}>
+        <DownloadOptionsDialog
+          open={true}
+          onClose={vi.fn()}
+          probeResult={{
+            ...samplePlaylistProbe,
+            entries: [],
+            playlistTotal: null,
+          }}
+          isLoading={false}
+          defaultPreset={defaultPreset}
+          onConfirmDownload={vi.fn().mockResolvedValue(undefined)}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByText('Cette playlist est vide')).toBeInTheDocument();
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: /lancer le téléchargement \(0\)/i })).toBeDisabled();
+  });
+
+  // 6d. Truncated enumeration is disclosed to the user
+  it('discloses that only the first videos of a long playlist are listed', () => {
+    const theme = createAppTheme('dark');
+
+    render(
+      <ThemeProvider theme={theme}>
+        <DownloadOptionsDialog
+          open={true}
+          onClose={vi.fn()}
+          probeResult={{ ...samplePlaylistProbe, playlistTotal: 12000, entriesLimit: 200 }}
+          isLoading={false}
+          defaultPreset={defaultPreset}
+          onConfirmDownload={vi.fn().mockResolvedValue(undefined)}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByText('Affichage des 200 premières vidéos')).toBeInTheDocument();
+    // A flat enumeration carries no formats: no size estimate can be shown.
+    expect(screen.queryByText(/Mo$/)).not.toBeInTheDocument();
   });
 
   // 7. Clickable card source URL and dismiss action
@@ -403,6 +556,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       getSettings: vi.fn().mockResolvedValue(defaultSettings),
       setSettings: vi.fn().mockImplementation(async (s) => s),
       startDownload: vi.fn(),
+      startPlaylistDownload: vi.fn().mockResolvedValue([]),
       listDownloads: vi.fn(),
       cancelDownload: vi.fn(),
       cancelAnalyze: vi.fn(),
@@ -419,6 +573,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       openHistoryFile: vi.fn(),
       openHistorySourceUrl: vi.fn(),
       openSupportPage: vi.fn().mockResolvedValue(undefined),
+      openContactEmail: vi.fn().mockResolvedValue(undefined),
       checkForUpdates: vi.fn().mockResolvedValue(null),
       downloadAndInstallUpdate: vi.fn().mockResolvedValue(undefined),
       restartApp: vi.fn().mockResolvedValue(undefined),
@@ -503,6 +658,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
         return Promise.resolve(s);
       }),
       startDownload: vi.fn(),
+      startPlaylistDownload: vi.fn().mockResolvedValue([]),
       listDownloads: vi.fn(),
       cancelDownload: vi.fn(),
       cancelAnalyze: vi.fn(),
@@ -519,6 +675,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       openHistoryFile: vi.fn(),
       openHistorySourceUrl: vi.fn(),
       openSupportPage: vi.fn().mockResolvedValue(undefined),
+      openContactEmail: vi.fn().mockResolvedValue(undefined),
       checkForUpdates: vi.fn().mockResolvedValue(null),
       downloadAndInstallUpdate: vi.fn().mockResolvedValue(undefined),
       restartApp: vi.fn().mockResolvedValue(undefined),
@@ -600,6 +757,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       }),
       setSettings: vi.fn(),
       startDownload: vi.fn(),
+      startPlaylistDownload: vi.fn().mockResolvedValue([]),
       listDownloads: vi.fn(),
       cancelDownload: vi.fn().mockResolvedValue(canceledJob),
       cancelAnalyze: vi.fn(),
@@ -616,6 +774,7 @@ describe('Sprint 7 Persistent History, Location Chooser, and UI Polish', () => {
       openHistoryFile: vi.fn(),
       openHistorySourceUrl: vi.fn(),
       openSupportPage: vi.fn().mockResolvedValue(undefined),
+      openContactEmail: vi.fn().mockResolvedValue(undefined),
       checkForUpdates: vi.fn().mockResolvedValue(null),
       downloadAndInstallUpdate: vi.fn().mockResolvedValue(undefined),
       restartApp: vi.fn().mockResolvedValue(undefined),

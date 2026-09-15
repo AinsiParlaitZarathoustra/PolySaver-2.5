@@ -119,6 +119,20 @@ export interface FormatOption {
   note?: string | null;
 }
 
+/** Kind of media resolved by an analysis. Mirrors the Rust `MediaKind`. */
+export type MediaKind = 'single' | 'playlist';
+
+/** One entry of a playlist, as returned by a flat (non-extracted) enumeration. */
+export interface PlaylistEntry {
+  index: number;
+  url: string;
+  title: string;
+  durationSeconds?: number | null;
+  thumbnailUrl?: string | null;
+  /** False for placeholder entries such as `[Private video]`. */
+  available: boolean;
+}
+
 export interface ProbeResult {
   url: string;
   title: string;
@@ -127,6 +141,14 @@ export interface ProbeResult {
   uploader?: string | null;
   formats: FormatOption[];
   availableVideoQualities: VideoQuality[];
+  /** `single` or `playlist`; absent on results produced before playlist support. */
+  kind?: MediaKind;
+  /** Always empty for a single item. */
+  entries?: PlaylistEntry[];
+  /** Total number of videos reported by the provider, when known. */
+  playlistTotal?: number | null;
+  /** Maximum number of entries the backend enumerates. */
+  entriesLimit?: number;
 }
 
 export interface AvailabilityStatus {

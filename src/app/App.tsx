@@ -373,13 +373,44 @@ export const App: React.FC = () => {
 
   // Confirmation from inside Guided Dialog
   const handleConfirmGuidedDownload = useCallback(
-    async (chosenPreset: DownloadPresetDto, chosenOutputDirectory?: string) => {
+    async (
+      chosenPreset: DownloadPresetDto,
+      chosenOutputDirectory?: string,
+      selectedUrls?: string[],
+    ) => {
       setIsSubmittingGuided(true);
       try {
         const outputDir =
           chosenOutputDirectory && chosenOutputDirectory !== settings.downloadDirectory
             ? chosenOutputDirectory
             : undefined;
+
+        // Playlist mode: one job per selected video, so each keeps its own progress,
+        // cancellation, retry and history entry. A failure here must never be silent.
+        if (selectedUrls && selectedUrls.length > 0) {
+          try {
+            const queued = await defaultIpcClient.startPlaylistDownload(
+              dialogUrl,
+              chosenPreset,
+              outputDir,
+              selectedUrls,
+            );
+            setJobs((prev) => {
+              const known = new Set(prev.map((j) => j.id));
+              const additions = queued.filter((j) => !known.has(j.id));
+              return [...additions, ...prev];
+            });
+            setToastSeverity('success');
+            setToastMessage(t('queue.playlistQueued', { count: queued.length }));
+            setDialogOpen(false);
+          } catch (err) {
+            setToastSeverity('error');
+            setToastMessage(
+              err instanceof Error ? err.message : t('errors.DOWNLOAD_PROCESS_FAILED'),
+            );
+          }
+          return;
+        }
 
         const job = await defaultIpcClient.startDownload(
           dialogUrl,
@@ -395,7 +426,7 @@ export const App: React.FC = () => {
         setIsSubmittingGuided(false);
       }
     },
-    [dialogUrl, settings.downloadDirectory],
+    [dialogUrl, settings.downloadDirectory, t],
   );
 
   // Cancel active job in pipeline
@@ -555,6 +586,10 @@ export const App: React.FC = () => {
           onClose={() => setHelpOpen(false)}
           client={defaultIpcClient}
           hasActiveDownloads={hasActiveDownloads}
+          onOpenPreferences={() => {
+            setHelpOpen(false);
+            setSettingsOpen(true);
+          }}
           onError={handleComponentError}
         />
 

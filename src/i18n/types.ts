@@ -27,6 +27,8 @@ export interface TranslationSchema {
     downloadTooltip: string;
     invalidUrlError: string;
     emptyUrlError: string;
+    playlistModeBadge: string;
+    playlistFastUnavailable: string;
   };
   dialog: {
     title: string;
@@ -38,6 +40,15 @@ export interface TranslationSchema {
     startDownload: string;
     chooseLocation: string;
     chooseLocationAria: string;
+    playlistVideosTitle: string;
+    playlistSelectAll: string;
+    playlistSelectNone: string;
+    playlistSelectedCount: string;
+    playlistTruncated: string;
+    playlistEmpty: string;
+    playlistUnavailableEntry: string;
+    playlistConfirm: string;
+    playlistNoSelection: string;
   };
   queue: {
     title: string;
@@ -67,6 +78,7 @@ export interface TranslationSchema {
     errorDetails: string;
     errorDetailsComponent: string;
     errorDetailsExitCode: string;
+    playlistQueued: string;
   };
   history: {
     title: string;
@@ -134,14 +146,12 @@ export interface TranslationSchema {
       quickDownloadTitle: string;
       quickDownloadStep1: string;
       quickDownloadStep2: string;
-      quickDownloadStep3: string;
-      quickDownloadNote: string;
+      quickDownloadStep3Prefix: string;
+      quickDownloadStep3Link: string;
       customDownloadTitle: string;
       customDownloadStep1: string;
       customDownloadStep2: string;
       customDownloadStep3: string;
-      customDownloadStep4: string;
-      customDownloadNote: string;
     };
     formatGuide: {
       videoQualitiesTitle: string;

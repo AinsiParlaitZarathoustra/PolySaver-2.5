@@ -11,6 +11,8 @@ import {
   Typography,
   Box,
   Button,
+  Checkbox,
+  Chip,
   ToggleButtonGroup,
   ToggleButton,
   Radio,
@@ -38,6 +40,7 @@ import type {
   DownloadPresetDto,
   Mp3Quality,
   OutputFormat,
+  PlaylistEntry,
   ProbeResult,
   VideoQuality,
 } from '../ipc/contracts';
@@ -53,6 +56,7 @@ interface DownloadOptionsDialogProps {
   onConfirmDownload: (
     preset: DownloadPresetDto,
     outputDirectory?: string,
+    selectedUrls?: string[],
   ) => Promise<void>;
   isSubmitting?: boolean;
 }
@@ -118,6 +122,20 @@ function getQualityMeta(
   }
 }
 
+/// Quality order used for a playlist, where the flat enumeration exposes no
+/// per-video format information, so the full static list is offered instead.
+const PLAYLIST_QUALITY_ORDER: VideoQuality[] = [
+  'best',
+  'p2160',
+  'p1440',
+  'p1080',
+  'p720',
+  'p480',
+  'p360',
+  'p240',
+  'p144',
+];
+
 export const DownloadOptionsDialog: React.FC<DownloadOptionsDialogProps> = ({
   open,
   onClose,
@@ -142,6 +160,8 @@ export const DownloadOptionsDialog: React.FC<DownloadOptionsDialogProps> = ({
   const [selectedDirectory, setSelectedDirectory] = useState<string>(defaultDownloadDirectory);
   const [imgError, setImgError] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // URLs of the playlist entries the user checked. Empty in single mode.
+  const [selectedUrls, setSelectedUrls] = useState<Set<string>>(() => new Set());
 
   // Safety net: if the dialog unmounts while an analysis is still running
   // (route/state change), make sure the process is aborted through onClose.
@@ -162,6 +182,12 @@ export const DownloadOptionsDialog: React.FC<DownloadOptionsDialogProps> = ({
 
   // Derive dynamic video qualities based on probe result
   const videoQualities = useMemo(() => {
+    // A playlist probe is flat: it carries no formats, so no quality can be derived
+    // from it. The static list keeps every choice reachable.
+    if (probeResult?.kind === 'playlist') {
+      return PLAYLIST_QUALITY_ORDER.map((q) => getQualityMeta(q, t('dialog.bestQuality')));
+    }
+
     const list: { quality: VideoQuality; label: string; height: number }[] = [
       getQualityMeta('best', t('dialog.bestQuality')),
     ];
@@ -199,6 +225,9 @@ export const DownloadOptionsDialog: React.FC<DownloadOptionsDialogProps> = ({
       setImgError(false);
       setSubmitError(null);
       setSelectedDirectory(defaultDownloadDirectory);
+      // A new analysis invalidates any previous playlist selection: entries belong
+      // to the playlist that was just probed.
+      setSelectedUrls(new Set());
       if (defaultPreset.format === 'mp3' || defaultPreset.format === 'flac') {
         setCategory('audio');
         setAudioFormat(defaultPreset.format);
@@ -215,7 +244,7 @@ export const DownloadOptionsDialog: React.FC<DownloadOptionsDialogProps> = ({
         setVideoQuality(isCandidateAvailable ? candidateQuality : 'best');
       }
     }
-  }, [open, defaultPreset, defaultDownloadDirectory, videoQualities]);
+  }, [open, defaultPreset, defaultDownloadDirectory, videoQualities, probeResult]);
 
   const handleCategoryChange = (
     _event: React.MouseEvent<HTMLElement>,
@@ -272,7 +301,11 @@ export const DownloadOptionsDialog: React.FC<DownloadOptionsDialogProps> = ({
     }
 
     try {
-      await onConfirmDownload(chosenPreset, selectedDirectory);
+      await onConfirmDownload(
+        chosenPreset,
+        selectedDirectory,
+        isPlaylistMode ? Array.from(selectedUrls) : undefined,
+      );
     } catch (err) {
       setSubmitError(
         err instanceof Error ? err.message : t('errors.DOWNLOAD_PROCESS_FAILED'),
@@ -280,7 +313,27 @@ export const DownloadOptionsDialog: React.FC<DownloadOptionsDialogProps> = ({
     }
   };
 
+  const toggleEntry = (entry: PlaylistEntry, checked: boolean) => {
+    setSelectedUrls((previous) => {
+      const next = new Set(previous);
+      if (checked) {
+        next.add(entry.url);
+      } else {
+        next.delete(entry.url);
+      }
+      return next;
+    });
+  };
+
+  const selectAllEntries = () => {
+    setSelectedUrls(
+      new Set(playlistEntries.filter((entry) => entry.available).map((entry) => entry.url)),
+    );
+  };
+
   const getApproxSizeForQuality = (quality: VideoQuality): string | null => {
+    // A flat playlist probe carries no formats: no size can be estimated.
+    if (isPlaylistMode) return null;
     if (!probeResult?.formats) return null;
 
     // 'best' has no height constraint; pXXX maps to the exact target height.
@@ -299,6 +352,15 @@ export const DownloadOptionsDialog: React.FC<DownloadOptionsDialogProps> = ({
 
   const hasSafeThumbnail =
     !imgError && isSafeThumbnailUrl(probeResult?.thumbnailUrl);
+
+  const isPlaylistMode = probeResult?.kind === 'playlist';
+  const playlistEntries = probeResult?.entries ?? [];
+  const selectedCount = selectedUrls.size;
+  const confirmDisabled =
+    isSubmitting ||
+    isLoading ||
+    !probeResult ||
+    (isPlaylistMode && (selectedCount === 0 || playlistEntries.length === 0));
 
   return (
     <Dialog
@@ -451,6 +513,134 @@ export const DownloadOptionsDialog: React.FC<DownloadOptionsDialogProps> = ({
               </Box>
             </Box>
           ) : null}
+
+          {/* Playlist entry selection: one checkbox per video */}
+          {isPlaylistMode && !isLoading && !errorMessage && (
+            <Box>
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 1,
+                  flexWrap: 'wrap',
+                  mb: 1,
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                    {t('dialog.playlistVideosTitle')}
+                  </Typography>
+                  <Chip
+                    label={t('dialog.playlistSelectedCount', {
+                      selected: selectedCount,
+                      total: playlistEntries.length,
+                    })}
+                    size="small"
+                    variant="outlined"
+                  />
+                </Box>
+                {playlistEntries.length > 0 && (
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button size="small" onClick={selectAllEntries} disabled={isSubmitting}>
+                      {t('dialog.playlistSelectAll')}
+                    </Button>
+                    <Button
+                      size="small"
+                      onClick={() => setSelectedUrls(new Set())}
+                      disabled={isSubmitting}
+                    >
+                      {t('dialog.playlistSelectNone')}
+                    </Button>
+                  </Box>
+                )}
+              </Box>
+
+              {playlistEntries.length === 0 ? (
+                <Alert severity="info">{t('dialog.playlistEmpty')}</Alert>
+              ) : (
+                <Box
+                  sx={{
+                    maxHeight: 260,
+                    overflowY: 'auto',
+                    border: 1,
+                    borderColor: 'divider',
+                    borderRadius: '10px',
+                    p: 0.5,
+                  }}
+                >
+                  {playlistEntries.map((entry) => (
+                    <FormControlLabel
+                      key={`${entry.index}-${entry.url}`}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={selectedUrls.has(entry.url)}
+                          disabled={!entry.available || isSubmitting}
+                          onChange={(e) => toggleEntry(entry, e.target.checked)}
+                        />
+                      }
+                      label={
+                        <Box
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'baseline',
+                            gap: 1,
+                            minWidth: 0,
+                            opacity: entry.available ? 1 : 0.55,
+                          }}
+                        >
+                          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+                            {entry.index}.
+                          </Typography>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              flex: 1,
+                              minWidth: 0,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {entry.available
+                              ? entry.title
+                              : t('dialog.playlistUnavailableEntry')}
+                          </Typography>
+                          {entry.durationSeconds ? (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              sx={{ flexShrink: 0 }}
+                            >
+                              {formatDuration(entry.durationSeconds)}
+                            </Typography>
+                          ) : null}
+                        </Box>
+                      }
+                      sx={{ display: 'flex', width: '100%', m: 0, py: 0.25, px: 1 }}
+                    />
+                  ))}
+                </Box>
+              )}
+
+              {playlistEntries.length > 0 &&
+                (playlistEntries.length >= (probeResult?.entriesLimit ?? Number.POSITIVE_INFINITY) ||
+                  (probeResult?.playlistTotal ?? 0) > playlistEntries.length) && (
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                    {t('dialog.playlistTruncated', {
+                      count: probeResult?.entriesLimit ?? playlistEntries.length,
+                    })}
+                  </Typography>
+                )}
+
+              {selectedCount === 0 && playlistEntries.length > 0 && (
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                  {t('dialog.playlistNoSelection')}
+                </Typography>
+              )}
+            </Box>
+          )}
 
           <Divider />
 
@@ -725,11 +915,13 @@ export const DownloadOptionsDialog: React.FC<DownloadOptionsDialogProps> = ({
           variant="contained"
           color="primary"
           onClick={handleConfirm}
-          disabled={isSubmitting || isLoading || !probeResult}
+          disabled={confirmDisabled}
           startIcon={<DownloadIcon />}
           sx={{ borderRadius: '10px', px: 3, fontWeight: 700 }}
         >
-          {t('dialog.startDownload')}
+          {isPlaylistMode
+            ? t('dialog.playlistConfirm', { count: selectedCount })
+            : t('dialog.startDownload')}
         </Button>
       </DialogActions>
     </Dialog>

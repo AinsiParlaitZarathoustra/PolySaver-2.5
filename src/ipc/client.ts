@@ -84,6 +84,18 @@ export interface IpcClient {
     preset?: DownloadPresetDto,
     outputDirectory?: string,
   ): Promise<DownloadJobDto>;
+  /**
+   * Starts one job per selected playlist entry.
+   *
+   * Every URL is re-validated by the backend before any job is created; this call
+   * only carries the user's selection.
+   */
+  startPlaylistDownload(
+    url: string,
+    preset: DownloadPresetDto | undefined,
+    outputDirectory: string | undefined,
+    selectedUrls: string[],
+  ): Promise<DownloadJobDto[]>;
   listDownloads(): Promise<DownloadJobDto[]>;
   cancelDownload(downloadId: string): Promise<DownloadJobDto>;
   retryDownload(downloadId: string): Promise<DownloadJobDto>;
@@ -98,6 +110,7 @@ export interface IpcClient {
   openHistoryFile(historyId: string): Promise<void>;
   openHistorySourceUrl(historyId: string): Promise<void>;
   openSupportPage(): Promise<void>;
+  openContactEmail(): Promise<void>;
   checkForUpdates(): Promise<UpdateInfo | null>;
   downloadAndInstallUpdate(onProgress?: UpdateProgressCallback): Promise<void>;
   restartApp(): Promise<void>;
@@ -157,6 +170,21 @@ export class TauriIpcClient implements IpcClient {
     try {
       return await invoke<DownloadJobDto>('start_download', {
         request: { url, preset, outputDirectory },
+      });
+    } catch (err) {
+      throw normalizeIpcError(err);
+    }
+  }
+
+  async startPlaylistDownload(
+    url: string,
+    preset: DownloadPresetDto | undefined,
+    outputDirectory: string | undefined,
+    selectedUrls: string[],
+  ): Promise<DownloadJobDto[]> {
+    try {
+      return await invoke<DownloadJobDto[]>('start_playlist_download', {
+        request: { url, preset, outputDirectory, selectedUrls },
       });
     } catch (err) {
       throw normalizeIpcError(err);
@@ -283,6 +311,14 @@ export class TauriIpcClient implements IpcClient {
   async openSupportPage(): Promise<void> {
     try {
       await invoke('open_support_page');
+    } catch (err) {
+      throw normalizeIpcError(err);
+    }
+  }
+
+  async openContactEmail(): Promise<void> {
+    try {
+      await invoke('open_contact_email');
     } catch (err) {
       throw normalizeIpcError(err);
     }

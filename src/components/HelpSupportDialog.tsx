@@ -15,6 +15,7 @@ import {
   Chip,
   Paper,
   Button,
+  Link,
   LinearProgress,
   Alert,
 } from '@mui/material';
@@ -35,6 +36,8 @@ interface HelpSupportDialogProps {
   onClose: () => void;
   client: IpcClient;
   hasActiveDownloads: boolean;
+  /** Opens the app preferences drawer from the in-guide shortcut link. */
+  onOpenPreferences: () => void;
   /** Surfaces action failures to the app-level toast instead of console-only. */
   onError?: (message: string) => void;
 }
@@ -44,6 +47,7 @@ export const HelpSupportDialog: React.FC<HelpSupportDialogProps> = ({
   onClose,
   client,
   hasActiveDownloads,
+  onOpenPreferences,
   onError,
 }) => {
   const { t } = useTranslation();
@@ -66,6 +70,15 @@ export const HelpSupportDialog: React.FC<HelpSupportDialogProps> = ({
       await client.openSupportPage();
     } catch (err) {
       console.error('Failed to open support page:', err);
+      onError?.(t('errors.UNKNOWN_ERROR'));
+    }
+  }, [client, onError, t]);
+
+  const handleContactEmail = useCallback(async () => {
+    try {
+      await client.openContactEmail();
+    } catch (err) {
+      console.error('Failed to open contact email:', err);
       onError?.(t('errors.UNKNOWN_ERROR'));
     }
   }, [client, onError, t]);
@@ -194,24 +207,24 @@ export const HelpSupportDialog: React.FC<HelpSupportDialogProps> = ({
                 {t('help.appGuide.quickDownloadStep2')}
               </Typography>
               <Typography variant="body2" color="text.primary" sx={{ mb: 1.5 }}>
-                {t('help.appGuide.quickDownloadStep3')}
+                {t('help.appGuide.quickDownloadStep3Prefix')}
+                <Link
+                  component="button"
+                  type="button"
+                  onClick={onOpenPreferences}
+                  underline="hover"
+                  aria-label={t('header.preferencesButtonAria')}
+                  sx={{
+                    color: 'primary.main',
+                    cursor: 'pointer',
+                    font: 'inherit',
+                    verticalAlign: 'baseline',
+                    p: 0,
+                  }}
+                >
+                  {t('help.appGuide.quickDownloadStep3Link')}
+                </Link>
               </Typography>
-              <Paper
-                variant="outlined"
-                sx={{
-                  p: 1.5,
-                  borderRadius: 2,
-                  bgcolor: (theme) =>
-                    theme.palette.mode === 'dark'
-                      ? 'rgba(255,255,255,0.03)'
-                      : 'rgba(0,0,0,0.02)',
-                  borderColor: 'divider',
-                }}
-              >
-                <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                  {t('help.appGuide.quickDownloadNote')}
-                </Typography>
-              </Paper>
             </Box>
 
             <Divider />
@@ -227,28 +240,9 @@ export const HelpSupportDialog: React.FC<HelpSupportDialogProps> = ({
               <Typography variant="body2" color="text.primary" sx={{ mb: 0.5 }}>
                 {t('help.appGuide.customDownloadStep2')}
               </Typography>
-              <Typography variant="body2" color="text.primary" sx={{ mb: 0.5 }}>
+              <Typography variant="body2" color="text.primary" sx={{ mb: 1.5 }}>
                 {t('help.appGuide.customDownloadStep3')}
               </Typography>
-              <Typography variant="body2" color="text.primary" sx={{ mb: 1.5 }}>
-                {t('help.appGuide.customDownloadStep4')}
-              </Typography>
-              <Paper
-                variant="outlined"
-                sx={{
-                  p: 1.5,
-                  borderRadius: 2,
-                  bgcolor: (theme) =>
-                    theme.palette.mode === 'dark'
-                      ? 'rgba(255,255,255,0.03)'
-                      : 'rgba(0,0,0,0.02)',
-                  borderColor: 'divider',
-                }}
-              >
-                <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                  {t('help.appGuide.customDownloadNote')}
-                </Typography>
-              </Paper>
             </Box>
           </Box>
         )}
@@ -491,12 +485,12 @@ export const HelpSupportDialog: React.FC<HelpSupportDialogProps> = ({
               {/* Contact Developer */}
               <Paper
                 variant="outlined"
-                onClick={handleOpenSupport}
+                onClick={handleContactEmail}
                 tabIndex={0}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    void handleOpenSupport();
+                    void handleContactEmail();
                   }
                 }}
                 aria-label={t('help.support.contactMeTitle')}
