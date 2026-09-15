@@ -196,6 +196,21 @@ impl From<&polysaver_core::domain::PlaylistEntry> for PlaylistEntryDto {
     }
 }
 
+/// Response DTO for the native "is this a playlist?" detection.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistDetectionDto {
+    pub is_playlist: bool,
+}
+
+impl From<polysaver_core::ports::PlaylistDetection> for PlaylistDetectionDto {
+    fn from(detection: polysaver_core::ports::PlaylistDetection) -> Self {
+        Self {
+            is_playlist: detection.is_playlist,
+        }
+    }
+}
+
 /// Dedicated explicit IPC response DTO for URL analysis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

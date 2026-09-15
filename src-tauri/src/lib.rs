@@ -19,7 +19,7 @@ pub mod path_resolver;
 use app_state::AppState;
 use events::TauriEventSink;
 use polysaver_core::ports::SettingsRepository as _;
-use polysaver_core::services::{AnalyzeUrlService, StartDownloadService};
+use polysaver_core::services::{AnalyzeUrlService, DetectPlaylistService, StartDownloadService};
 use polysaver_ffmpeg::FfmpegConverter;
 use polysaver_storage::{JsonDownloadHistoryRepository, JsonSettingsRepository};
 use polysaver_ytdlp::YtDlpDownloader;
@@ -111,6 +111,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // Instantiate core use case services
             let analyze_service = Arc::new(AnalyzeUrlService::new(ytdlp_downloader.clone()));
+            // Same adapter, separate use case: the engine answers whether an URL is
+            // a playlist, without downloading anything.
+            let detect_playlist_service =
+                Arc::new(DetectPlaylistService::new(ytdlp_downloader.clone()));
             let start_download_service = Arc::new(
                 StartDownloadService::new_with_retry_policy(
                     ytdlp_downloader.clone(),
@@ -128,6 +132,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let state = AppState {
                 start_download_service,
                 analyze_service,
+                detect_playlist_service,
                 settings_repo,
                 resolver,
                 home_dir,
@@ -143,6 +148,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .invoke_handler(tauri::generate_handler![
             commands::health_check,
             commands::analyze_url,
+            commands::detect_playlist,
+            commands::cancel_playlist_detection,
             commands::cancel_analyze,
             commands::get_settings,
             commands::set_settings,

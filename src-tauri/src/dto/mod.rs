@@ -9,6 +9,7 @@ pub use error::IpcError;
 pub use history::DownloadHistoryEntryDto;
 pub use media::{
     AnalyzeUrlRequest, DownloadJobDto, EngineUpdateResultDto, EngineUpdateStatusDto,
-    FormatOptionDto, HealthResponse, JsRuntimeAvailability, JsRuntimeStatusDto, PlaylistEntryDto,
-    ProbeResultDto, SetSettingsRequest, StartDownloadRequestDto, StartPlaylistDownloadRequestDto,
+    FormatOptionDto, HealthResponse, JsRuntimeAvailability, JsRuntimeStatusDto,
+    PlaylistDetectionDto, PlaylistEntryDto, ProbeResultDto, SetSettingsRequest,
+    StartDownloadRequestDto, StartPlaylistDownloadRequestDto,
 };

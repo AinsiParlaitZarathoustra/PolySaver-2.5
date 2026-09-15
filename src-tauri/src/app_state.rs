@@ -3,7 +3,7 @@
 
 use polysaver_binres::BinaryResolver;
 use polysaver_core::ports::SettingsRepository;
-use polysaver_core::services::{AnalyzeUrlService, StartDownloadService};
+use polysaver_core::services::{AnalyzeUrlService, DetectPlaylistService, StartDownloadService};
 use std::sync::Arc;
 
 /// Central application state injected into Tauri commands.
@@ -11,6 +11,8 @@ use std::sync::Arc;
 pub struct AppState {
     pub start_download_service: Arc<StartDownloadService>,
     pub analyze_service: Arc<AnalyzeUrlService>,
+    /// Native "is this a playlist?" detection, answered by the engine itself.
+    pub detect_playlist_service: Arc<DetectPlaylistService>,
     pub settings_repo: Arc<dyn SettingsRepository>,
     pub resolver: Arc<BinaryResolver>,
     pub home_dir: std::path::PathBuf,

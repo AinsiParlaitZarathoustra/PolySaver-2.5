@@ -23,6 +23,7 @@ use polysaver_core::ports::media_downloader::{
     CookiesDiagnostic, DownloadStreamRequest, DownloadedStreams, JsRuntimeSpec, MediaDownloader,
     StreamProgress,
 };
+use polysaver_core::ports::playlist_detector::{PlaylistDetection, PlaylistDetector};
 use polysaver_core::ports::MediaProvider;
 use process_runner::{parse_fallback_progress_line, YtDlpProcessRunner};
 use serde::{Deserialize, Serialize};
@@ -211,6 +212,53 @@ fn build_probe_args(
     push_js_runtime_arg(&mut args, js_runtime);
     args.push(url.as_str().to_string());
     args
+}
+
+/// Builds the argument list for the native "is this a playlist?" detection.
+///
+/// `--playlist-items 0` (an empty selection) asks yt-dlp for the *envelope* only:
+/// no entry is resolved, but the extractor still fetches the listing metadata, so
+/// `_type`, `title` and `playlist_count` come back without extracting a single
+/// video. This is the native answer, as opposed to the URL-shape heuristic: only
+/// the engine knows what an URL really resolves to.
+///
+/// `--flat-playlist` keeps the call cheap on multi-video URLs and has no effect on
+/// a single video. `--lazy-playlist` is deliberately never passed (it disables
+/// `n_entries` and brings nothing here), and neither is `--skip-download`, which
+/// still writes auxiliary files.
+///
+/// Measured with the bundled engine (2026.08.19, macOS arm64, warm cache): about
+/// 1.2 s for a playlist or a channel, 2.3 s for a single video. `playlist_count` is
+/// not always available (it is `null` on `/@handle/videos`, where the total is
+/// unknown to the extractor), so it must stay optional.
+fn build_detect_args(url: &MediaUrl) -> Vec<String> {
+    vec![
+        "--dump-single-json".to_string(),
+        "--no-warnings".to_string(),
+        "--flat-playlist".to_string(),
+        "--playlist-items".to_string(),
+        "0".to_string(),
+        url.as_str().to_string(),
+    ]
+}
+
+/// Interprets a `-J` document as "playlist / not a playlist".
+///
+/// `_type` is always present in dumped JSON (`sanitize_info` defaults it to
+/// `video`), and `multi_video` describes the multi-video results of nine
+/// extractors, so it counts as a playlist. A `null` document is a failure, never a
+/// video: yt-dlp prints `null` with a non-zero exit code for a private or missing
+/// playlist, and the caller surfaces that before reaching here.
+fn parse_playlist_detection(parsed: &serde_json::Value) -> Result<PlaylistDetection, CoreError> {
+    if parsed.is_null() {
+        return Err(CoreError::ProviderError(
+            "Le moteur n'a renvoyé aucune information pour cette adresse.".to_string(),
+        ));
+    }
+    let media_type = parsed["_type"].as_str().unwrap_or("video");
+    Ok(PlaylistDetection {
+        is_playlist: matches!(media_type, "playlist" | "multi_video"),
+    })
 }
 
 /// Discovers or validates the yt-dlp executable.
@@ -447,6 +495,45 @@ impl MediaProvider for YtDlpDownloader {
 }
 
 #[async_trait]
+impl PlaylistDetector for YtDlpDownloader {
+    async fn detect_playlist(
+        &self,
+        url: &MediaUrl,
+        cancellation_token: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<PlaylistDetection, CoreError> {
+        let resolved = self.resolver.resolve_ytdlp().await.map_err(|_| {
+            CoreError::DownloadFailed(DownloadErrorDetails::from_code(
+                DownloadErrorCode::YtdlpNotFound,
+            ))
+        })?;
+        let binary = resolved.path;
+        let version = Some(resolved.version);
+        let ffmpeg_bin = self.resolver.resolve_ffmpeg().await.ok().map(|r| r.path);
+
+        let temp_dir = std::env::temp_dir();
+        let args = build_detect_args(url);
+
+        let run_result = YtDlpProcessRunner::run(
+            &binary,
+            ffmpeg_bin.as_deref(),
+            &args,
+            &temp_dir,
+            cancellation_token.as_ref(),
+            None,
+            version,
+        )
+        .await?;
+
+        let json_str = run_result.stdout_lines.join("\n");
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).map_err(|err| {
+            CoreError::ProviderError(format!("Failed to parse metadata JSON: {err}"))
+        })?;
+
+        parse_playlist_detection(&parsed)
+    }
+}
+
+#[async_trait]
 impl MediaDownloader for YtDlpDownloader {
     async fn download_stream(
         &self,
@@ -676,6 +763,57 @@ mod tests {
         assert!(META_PRINT_TEMPLATE.contains("f0:%(requested_formats.0.format_id)s"));
         assert!(META_PRINT_TEMPLATE.contains("fallback_id:%(format_id)s"));
         assert!(META_PRINT_TEMPLATE.contains("fallback_size:%(filesize,filesize_approx)s"));
+    }
+
+    #[test]
+    fn test_detect_args_request_the_envelope_only() {
+        let url = MediaUrl::parse("https://www.youtube.com/watch?v=abc").unwrap();
+        let args = build_detect_args(&url);
+
+        assert!(args.iter().any(|a| a == "--dump-single-json"));
+        assert!(args.iter().any(|a| a == "--flat-playlist"));
+
+        // An empty selection: the listing metadata is fetched, no entry resolved.
+        let items_index = args
+            .iter()
+            .position(|a| a == "--playlist-items")
+            .expect("--playlist-items must be present");
+        assert_eq!(args[items_index + 1], "0");
+
+        // `--lazy-playlist` disables `n_entries`; `--skip-download` still writes
+        // auxiliary files. Neither belongs in a detection call.
+        assert!(!args.iter().any(|a| a == "--lazy-playlist"));
+        assert!(!args.iter().any(|a| a == "--skip-download"));
+        // The URL stays last, so no user value can be swallowed as a flag argument.
+        assert_eq!(args.last().map(String::as_str), Some(url.as_str()));
+    }
+
+    #[test]
+    fn test_playlist_detection_reads_the_native_type() {
+        // A playlist envelope, as returned by `-J --flat-playlist -I 0`.
+        let playlist: serde_json::Value = serde_json::from_str(
+            r#"{"_type": "playlist", "title": "Ma playlist", "playlist_count": 35, "entries": []}"#,
+        )
+        .unwrap();
+        assert!(parse_playlist_detection(&playlist).unwrap().is_playlist);
+
+        // Multi-video results of nine extractors are playlists too.
+        let multi: serde_json::Value =
+            serde_json::from_str(r#"{"_type": "multi_video", "entries": []}"#).unwrap();
+        assert!(parse_playlist_detection(&multi).unwrap().is_playlist);
+
+        // A single video: `_type` is present and equals `video`.
+        let video: serde_json::Value =
+            serde_json::from_str(r#"{"_type": "video", "title": "Vidéo"}"#).unwrap();
+        assert!(!parse_playlist_detection(&video).unwrap().is_playlist);
+
+        // A missing `_type` falls back to the JSON default (`video`).
+        let no_type: serde_json::Value = serde_json::from_str(r#"{"title": "Vidéo"}"#).unwrap();
+        assert!(!parse_playlist_detection(&no_type).unwrap().is_playlist);
+
+        // `null` is a failure (private/missing playlist), never a video.
+        let null_doc: serde_json::Value = serde_json::from_str("null").unwrap();
+        assert!(parse_playlist_detection(&null_doc).is_err());
     }
 
     #[test]

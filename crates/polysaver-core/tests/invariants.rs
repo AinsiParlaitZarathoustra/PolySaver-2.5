@@ -221,13 +221,29 @@ fn test_playlist_urls_are_classified_as_playlists() {
         "https://www.youtube.com/@handle/streams",
         "https://www.youtube.com/c/SomeChannel",
         "https://www.youtube.com/user/SomeUser",
-        "https://example.com/feed?list=abc",
+        "https://soundcloud.com/artist/sets/album",
     ] {
         let url = MediaUrl::parse(raw).expect("listing URL must be accepted");
         assert_eq!(
             url.kind(),
             MediaUrlKind::Playlist,
             "expected playlist for {raw}"
+        );
+    }
+
+    // `list=` is a YouTube convention. Elsewhere it is an ordinary query parameter
+    // (pagination, sorting, tracking) and must NOT switch the app into playlist
+    // mode, otherwise the green button would be wrongly disabled.
+    for raw in [
+        "https://example.com/feed?list=abc",
+        "https://vimeo.com/12345?list=xyz",
+        "https://example.com/gallery?page=2&list=items",
+    ] {
+        let url = MediaUrl::parse(raw).expect("URL must be accepted");
+        assert_eq!(
+            url.kind(),
+            MediaUrlKind::Single,
+            "list= must not imply a playlist outside YouTube: {raw}"
         );
     }
 

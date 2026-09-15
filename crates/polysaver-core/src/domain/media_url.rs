@@ -71,29 +71,38 @@ impl MediaUrl {
 
     /// Offline classification of this URL as a single item or a playlist/listing.
     ///
-    /// The `list=` parameter alone does not make a URL a playlist: it is appended by
-    /// YouTube's "Share" button and rarely means "download the whole playlist", so
-    /// [`Self::parse`] strips it whenever an explicit video id (`v=`) is present.
+    /// This is a *shape* heuristic used as a fast pre-classification (and as the
+    /// fallback when the engine cannot be reached). The engine answer obtained
+    /// through the `PlaylistDetector` port is the authoritative one, because only
+    /// yt-dlp knows what an URL really resolves to.
+    ///
+    /// `list=` is a YouTube convention: it is appended by the "Share" button and
+    /// rarely means "download the whole playlist", so [`Self::parse`] strips it
+    /// whenever an explicit video id (`v=`) is present, and it is only treated as
+    /// a playlist marker on YouTube hosts. On other sites `list` is an ordinary
+    /// query parameter (pagination, sorting, tracking) and must not switch the UI
+    /// into playlist mode.
     #[must_use]
     pub fn kind(&self) -> MediaUrlKind {
-        if is_playlist_path(self.0.path()) {
+        if is_playlist_path(self.0.path()) || is_soundcloud_set(&self.0) {
             return MediaUrlKind::Playlist;
         }
-        let mut has_list = false;
-        let mut has_video_id = false;
-        for (key, _) in self.0.query_pairs() {
-            let key = key.to_ascii_lowercase();
-            if key == "list" {
-                has_list = true;
-            } else if key == "v" {
-                has_video_id = true;
+        if is_youtube_host(&self.0) {
+            let mut has_list = false;
+            let mut has_video_id = false;
+            for (key, _) in self.0.query_pairs() {
+                let key = key.to_ascii_lowercase();
+                if key == "list" {
+                    has_list = true;
+                } else if key == "v" {
+                    has_video_id = true;
+                }
+            }
+            if has_list && !has_video_id {
+                return MediaUrlKind::Playlist;
             }
         }
-        if has_list && !has_video_id {
-            MediaUrlKind::Playlist
-        } else {
-            MediaUrlKind::Single
-        }
+        MediaUrlKind::Single
     }
 
     /// Convenience predicate for [`Self::kind`].
@@ -147,8 +156,8 @@ impl TryFrom<String> for MediaUrl {
 /// single item: YouTube playlists and channel pages (`/channel`, `/c/`, `/user/`,
 /// `/@handle`, including their `/videos`, `/streams` and `/shorts` sub-pages).
 ///
-/// `list=` alone is handled separately by [`MediaUrl::kind`]: it only means
-/// "playlist" when no explicit video id is present.
+/// `list=` alone is handled separately by [`MediaUrl::kind`]: it is a YouTube
+/// convention and only means "playlist" there.
 #[must_use]
 pub fn is_playlist_path(path: &str) -> bool {
     let path = path.to_ascii_lowercase();
@@ -157,6 +166,32 @@ pub fn is_playlist_path(path: &str) -> bool {
         || path.starts_with("/c/")
         || path.starts_with("/user/")
         || path.starts_with("/@")
+}
+
+/// Returns true when the URL points at a SoundCloud set (their playlist form).
+#[must_use]
+pub fn is_soundcloud_set(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let is_soundcloud = host == "soundcloud.com" || host.ends_with(".soundcloud.com");
+    is_soundcloud && url.path().to_ascii_lowercase().contains("/sets/")
+}
+
+/// Returns true when the URL points at a YouTube host (including `m.`/`music.`
+/// subdomains and the `youtu.be` shortener).
+#[must_use]
+pub fn is_youtube_host(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    host == "youtube.com"
+        || host.ends_with(".youtube.com")
+        || host == "youtu.be"
+        || host == "youtube-nocookie.com"
+        || host.ends_with(".youtube-nocookie.com")
 }
 
 /// Strips the `list=` query parameter when an explicit `v=` video id is present.
